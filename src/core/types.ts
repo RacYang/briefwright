@@ -1,4 +1,4 @@
-export type ReceiptResult = "updated" | "unchanged" | "failed" | "skipped";
+export type ReceiptResult = "observed" | "updated" | "unchanged" | "failed" | "skipped";
 
 export interface Receipt {
   sourceId: string;
@@ -26,4 +26,3 @@ export interface RunResult {
   daily: BriefingItem[];
   review: BriefingItem[];
 }
-

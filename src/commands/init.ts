@@ -48,7 +48,12 @@ export async function initializeProject(options: InitOptions): Promise<string> {
           defaultValue: interests.join(", "),
         }),
       },
-      { onCancel: () => p.cancel("Initialization cancelled; no files were changed.") },
+      {
+        onCancel: () => {
+          p.cancel("Initialization cancelled; no files were changed.");
+          throw new Error("Initialization cancelled; no files were changed");
+        },
+      },
     );
     if (p.isCancel(answers.name) || p.isCancel(answers.interests)) {
       throw new Error("Initialization cancelled; no files were changed");
@@ -71,4 +76,3 @@ export async function initializeProject(options: InitOptions): Promise<string> {
   await writeFile(configPath, stringify(intent), { encoding: "utf8", flag: "wx" });
   return configPath;
 }
-

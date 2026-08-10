@@ -1,6 +1,6 @@
 {
   "name": "briefwright",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "description": "Auditable, human-in-the-loop intelligence briefings from sources to knowledge.",
   "type": "module",
   "bin": {
@@ -11,7 +11,9 @@
     "presets",
     "schemas",
     "templates",
+    "skill",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -41,6 +43,9 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "commander": "^14.0.0",
+    "fast-xml-parser": "^5.10.1",
+    "ipaddr.js": "^2.5.0",
+    "undici": "^8.10.0",
     "yaml": "^2.8.1"
   },
   "devDependencies": {

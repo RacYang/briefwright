@@ -29,7 +29,7 @@ export async function runDemo(root = path.join(homedir(), ".briefwright", "demo"
   const markdown = renderMarkdown(config, result);
   const outputPath = path.join(config.output.directory, "briefwright-demo.md");
 
-  await writeArtifactAtomic(outputPath, markdown);
+  await writeArtifactAtomic(config.projectRoot, outputPath, markdown);
 
   return {
     outputPath,

@@ -8,20 +8,24 @@
   "cost": "moderate",
   "sources": [
     {
-      "id": "DEMO-MODEL-LAB",
-      "title": "Example model lab",
-      "connector": "fixture"
+      "id": "SRC-QWEN-CODE-RELEASES",
+      "title": "Qwen Code releases",
+      "connector": {
+        "type": "github-releases",
+        "config": {
+          "repository": "QwenLM/qwen-code"
+        }
+      }
     },
     {
-      "id": "DEMO-AGENT-RUNTIME",
-      "title": "Example agent runtime",
-      "connector": "fixture"
-    },
-    {
-      "id": "DEMO-SAFETY-STANDARD",
-      "title": "Example safety standards body",
-      "connector": "fixture"
+      "id": "SRC-ARXIV-CS-AI",
+      "title": "arXiv Computer Science - Artificial Intelligence",
+      "connector": {
+        "type": "rss",
+        "config": {
+          "url": "https://export.arxiv.org/rss/cs.AI"
+        }
+      }
     }
   ]
 }
-

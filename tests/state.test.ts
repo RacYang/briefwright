@@ -10,7 +10,7 @@ import { createFixtureRun } from "../src/core/fixture.js";
 import { SqliteStateStore } from "../src/state/sqlite.js";
 
 describe("SQLite state", () => {
-  it("allows idempotent saves but rejects the same run ID with a different config", async () => {
+  it("keeps finalized runs immutable and rejects reuse with a different config", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-state-"));
     const preset = await loadPreset("ai-daily");
     const baseIntent: BriefingIntent = {
@@ -24,11 +24,11 @@ describe("SQLite state", () => {
     };
     const firstConfig = buildEffectiveConfig(root, baseIntent, preset);
     const firstRun = createFixtureRun(firstConfig, new Date("2026-08-10T00:00:00Z"));
-    const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"));
+    const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"), root);
 
     try {
       expect(() => store.saveRun(firstConfig, firstRun)).not.toThrow();
-      expect(() => store.saveRun(firstConfig, firstRun)).not.toThrow();
+      expect(() => store.saveRun(firstConfig, firstRun)).toThrow("already finalized");
 
       const changedConfig = buildEffectiveConfig(
         root,
@@ -36,11 +36,12 @@ describe("SQLite state", () => {
         preset,
       );
       const changedRun = createFixtureRun(changedConfig, new Date("2026-08-10T01:00:00Z"));
-      expect(changedRun.runId).toBe(firstRun.runId);
-      expect(() => store.saveRun(changedConfig, changedRun)).toThrow("different configuration digest");
+      expect(changedRun.runId).not.toBe(firstRun.runId);
+      expect(() =>
+        store.saveRun(changedConfig, { ...changedRun, runId: firstRun.runId }),
+      ).toThrow("different configuration digest");
     } finally {
       store.close();
     }
   });
 });
-

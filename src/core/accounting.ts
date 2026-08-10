@@ -2,6 +2,7 @@ import type { Receipt, ReceiptResult } from "./types.js";
 
 export interface ReceiptCounts {
   due: number;
+  observed: number;
   updated: number;
   unchanged: number;
   failed: number;
@@ -13,6 +14,7 @@ export function countReceipts(dueSourceIds: string[], receipts: Receipt[]): Rece
   const due = new Set(dueSourceIds);
   const seen = new Set<string>();
   const counts: Record<ReceiptResult, number> = {
+    observed: 0,
     updated: 0,
     unchanged: 0,
     failed: 0,
@@ -37,3 +39,10 @@ export function countReceipts(dueSourceIds: string[], receipts: Receipt[]): Rece
   };
 }
 
+export type RunOutcome = "success" | "partial" | "failed";
+
+export function runOutcome(counts: ReceiptCounts): RunOutcome {
+  if (counts.failed === counts.due || counts.missing === counts.due) return "failed";
+  if (counts.failed > 0 || counts.missing > 0) return "partial";
+  return "success";
+}

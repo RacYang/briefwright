@@ -1,0 +1,115 @@
+import { createHash } from "node:crypto";
+
+import { XMLParser } from "fast-xml-parser";
+
+import type { SourceDefinition } from "../config/types.js";
+import { assertPublicHttpsUrl, readTextLimited } from "./http.js";
+import type { CaptureEnvelope, Connector, ConnectorContext } from "./types.js";
+
+type RssSource = SourceDefinition & {
+  connector: { type: "rss"; config: { url: string } };
+};
+
+interface FeedItem {
+  title?: string;
+  link?: string | { "@_href"?: string; "@_rel"?: string } | Array<{ "@_href"?: string; "@_rel"?: string }>;
+  guid?: string;
+  id?: string;
+  description?: string;
+  summary?: string;
+  pubDate?: string;
+  published?: string;
+  updated?: string;
+}
+
+function list<T>(value: T | T[] | undefined): T[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function stripMarkup(value: string | undefined): string {
+  return (value ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+}
+
+function itemUrl(item: FeedItem): string | undefined {
+  if (typeof item.link === "string") return item.link;
+  const links = list(item.link);
+  return (links.find((link) => link["@_rel"] === "alternate") ?? links[0])?.["@_href"];
+}
+
+export class RssConnector implements Connector<RssSource> {
+  readonly descriptor = {
+    type: "rss" as const,
+    version: "1.0.0",
+    title: "RSS and Atom",
+    requiresCredentials: false,
+  };
+
+  async check(source: RssSource, context: ConnectorContext) {
+    assertPublicHttpsUrl(source.connector.config.url);
+    const response = await context.fetch(source.connector.config.url, {
+      headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
+    });
+    return response.ok
+      ? { ok: true, detail: `${source.connector.config.url} is accessible` }
+      : { ok: false, detail: `Feed returned HTTP ${response.status}` };
+  }
+
+  async capture(source: RssSource, context: ConnectorContext): Promise<CaptureEnvelope[]> {
+    assertPublicHttpsUrl(source.connector.config.url);
+    const response = await context.fetch(source.connector.config.url, {
+      headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
+    });
+    if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
+    const xml = await readTextLimited(response, 5 * 1024 * 1024);
+    const parser = new XMLParser({ ignoreAttributes: false, trimValues: true });
+    const parsed = parser.parse(xml) as {
+      rss?: { channel?: { item?: FeedItem | FeedItem[] } };
+      feed?: { entry?: FeedItem | FeedItem[] };
+    };
+    const items = [
+      ...list(parsed.rss?.channel?.item),
+      ...list(parsed.feed?.entry),
+    ];
+
+    return items.flatMap((item) => {
+      const rawUrl = itemUrl(item);
+      const title = stripMarkup(item.title);
+      if (!rawUrl || !title) return [];
+      let url: string;
+      try {
+        url = assertPublicHttpsUrl(rawUrl).toString();
+      } catch {
+        return [];
+      }
+      const externalKey = item.guid ?? item.id ?? url;
+      const content = `${title}\n${item.description ?? item.summary ?? ""}`;
+      const publishedAt = item.pubDate ?? item.published ?? item.updated;
+      const publishedDate = publishedAt ? new Date(publishedAt) : null;
+      const normalizedPublishedAt = publishedDate && Number.isFinite(publishedDate.getTime())
+        ? publishedDate.toISOString()
+        : undefined;
+      return [{
+        sourceId: source.id,
+        externalKey,
+        canonicalUrl: url,
+        title,
+        summary: stripMarkup(item.description ?? item.summary),
+        capturedAt: context.now().toISOString(),
+        ...(normalizedPublishedAt ? { publishedAt: normalizedPublishedAt } : {}),
+        contentHash: createHash("sha256").update(content).digest("hex"),
+        evidenceClass: "primary" as const,
+      }];
+    });
+  }
+}
+
+export function isRssSource(source: SourceDefinition): source is RssSource {
+  return source.connector.type === "rss";
+}

@@ -13,7 +13,7 @@ describe("due-source accounting", () => {
           { sourceId: "C", result: "failed" },
         ],
       ),
-    ).toEqual({ due: 3, updated: 1, unchanged: 1, failed: 1, skipped: 0, missing: 0 });
+    ).toEqual({ due: 3, observed: 0, updated: 1, unchanged: 1, failed: 1, skipped: 0, missing: 0 });
   });
 
   it("reports missing receipts", () => {
@@ -35,4 +35,3 @@ describe("due-source accounting", () => {
     );
   });
 });
-

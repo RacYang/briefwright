@@ -1,8 +1,8 @@
 # Briefwright
 
-Briefwright turns source changes into calm, source-linked, auditable briefings. It is designed for people who want a useful briefing in minutes and for operators who need deterministic receipts, evidence gates, replayable runs, and human approval before knowledge-base writes.
+Briefwright turns public-source snapshots into calm, source-linked, auditable briefings. It is designed for people who want a useful briefing in minutes and for operators who need deterministic receipts, replayable runs, and explicit approval boundaries before future external writes.
 
-> Status: early bootstrap. The public interface and configuration contracts are being defined before the first runnable release.
+> Status: pre-release. The offline demo, guided initialization, strict intent configuration, local SQLite state, Markdown preview, and initial public-source connectors are working. Scheduling and knowledge-base integration remain disabled.
 
 ## Product promise
 
@@ -13,14 +13,20 @@ Briefwright turns source changes into calm, source-linked, auditable briefings. 
 - Never silently turn a failed source into a confirmed fact.
 - Require explicit human approval before writing to a knowledge base.
 
-## Intended quick start
+## Quick start from a checkout
 
 ```bash
-npx briefwright demo
-npx briefwright init
-npx briefwright preview
-npx briefwright enable
+pnpm install
+pnpm run build
+node dist/cli.js demo
+
+mkdir my-briefing
+node dist/cli.js init --yes --directory my-briefing
+node dist/cli.js preview --config my-briefing/briefing.yaml
+node dist/cli.js preview --live --config my-briefing/briefing.yaml
 ```
+
+The default preview uses clearly marked bundled fixtures. `--live` performs read-only network access to the preset's public sources. Each preview writes an immutable, run-named Markdown artifact. Neither command enables a schedule or writes to a knowledge base.
 
 The internal system may be sophisticated; the user should only need to answer:
 
@@ -41,7 +47,22 @@ Briefwright separates:
 
 See the accepted design records in [`docs/rfcs`](docs/rfcs).
 
+## Current commands
+
+- `demo`: offline proof with bundled fixtures.
+- `init`: guided or non-interactive creation of one `briefing.yaml`.
+- `preview`: local fixture or live public-source preview.
+- `replay`: offline re-render and hash verification of a recorded run snapshot.
+- `config validate|render|explain`: strict configuration tools.
+- `doctor`: local environment checks.
+- `status`: schedule state and the latest local run summary.
+- `open`: open or print the latest local briefing path.
+- `capabilities`: describe installed features for users and Skills.
+
+Use the global `--json` option for bounded machine-readable output. The Codex Skill in [`skill/briefwright`](skill/briefwright) uses this interface and does not duplicate runtime logic.
+
+The package includes the Skill files. Until an installer is added, copy `skill/briefwright` into the Codex skills directory or use it directly from a checkout.
+
 ## License
 
 Apache License 2.0.
-

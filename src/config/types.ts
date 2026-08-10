@@ -11,7 +11,15 @@ export interface BriefingIntent {
 export interface SourceDefinition {
   id: string;
   title: string;
-  connector: string;
+  connector:
+    | {
+        type: "github-releases";
+        config: { repository: string };
+      }
+    | {
+        type: "rss";
+        config: { url: string };
+      };
 }
 
 export interface PresetDefinition {
@@ -46,4 +54,3 @@ export interface EffectiveConfig {
     timeoutSeconds: number;
   };
 }
-

@@ -79,8 +79,29 @@ export async function loadEffectiveConfig(configPath: string): Promise<Effective
 }
 
 export async function loadPreset(presetId: BriefingIntent["preset"]): Promise<PresetDefinition> {
-  const presetText = await readFile(path.join(packageRoot, `presets/${presetId}.json`), "utf8");
-  return JSON.parse(presetText) as PresetDefinition;
+  const [presetText, schemaText] = await Promise.all([
+    readFile(path.join(packageRoot, `presets/${presetId}.json`), "utf8"),
+    readFile(path.join(packageRoot, "schemas/preset.schema.json"), "utf8"),
+  ]);
+  const document = JSON.parse(presetText) as unknown;
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  addFormats(ajv);
+  const validate = ajv.compile(JSON.parse(schemaText) as object);
+  if (!validate(document)) {
+    throw new ConfigurationError(
+      `Bundled preset '${presetId}' is invalid`,
+      (validate.errors ?? []).map(formatProblem),
+    );
+  }
+  const preset = document as PresetDefinition;
+  const sourceIds = preset.sources.map((source) => source.id);
+  const duplicates = sourceIds.filter((id, index) => sourceIds.indexOf(id) !== index);
+  if (duplicates.length > 0) {
+    throw new ConfigurationError(`Bundled preset '${presetId}' is invalid`, [
+      `sources contain duplicate IDs: ${[...new Set(duplicates)].join(", ")}`,
+    ]);
+  }
+  return preset;
 }
 
 export function buildEffectiveConfig(
@@ -118,7 +139,7 @@ export function canonicalJson(value: unknown): string {
   }
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>
-      left.localeCompare(right),
+      left < right ? -1 : left > right ? 1 : 0,
     );
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
   }

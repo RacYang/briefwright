@@ -13,11 +13,10 @@ describe("offline demo", () => {
     const markdown = await readFile(result.outputPath, "utf8");
 
     expect(result.itemCount).toBeGreaterThan(0);
-    expect(result.receiptCount).toBe(3);
+    expect(result.receiptCount).toBe(2);
     expect(markdown).toContain("data_mode: fixture");
     expect(markdown).toContain("Demonstration data");
-    expect(markdown).toContain("Due sources: 3");
+    expect(markdown).toContain("Due sources: 2");
     expect(markdown).toContain("Missing: 0");
   });
 });
-

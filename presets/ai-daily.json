@@ -1,0 +1,27 @@
+{
+  "id": "ai-daily",
+  "version": "0.1.0",
+  "title": "AI daily briefing",
+  "description": "A strict, low-noise briefing from primary AI sources.",
+  "quality": "strict",
+  "coverage": "balanced",
+  "cost": "moderate",
+  "sources": [
+    {
+      "id": "DEMO-MODEL-LAB",
+      "title": "Example model lab",
+      "connector": "fixture"
+    },
+    {
+      "id": "DEMO-AGENT-RUNTIME",
+      "title": "Example agent runtime",
+      "connector": "fixture"
+    },
+    {
+      "id": "DEMO-SAFETY-STANDARD",
+      "title": "Example safety standards body",
+      "connector": "fixture"
+    }
+  ]
+}
+

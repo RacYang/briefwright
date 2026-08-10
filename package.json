@@ -1,0 +1,52 @@
+{
+  "name": "briefwright",
+  "version": "0.0.0",
+  "description": "Auditable, human-in-the-loop intelligence briefings from sources to knowledge.",
+  "type": "module",
+  "bin": {
+    "briefwright": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "presets",
+    "schemas",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "check": "pnpm run typecheck && pnpm run test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "node dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24.11"
+  },
+  "packageManager": "pnpm@11.16.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RacYang/briefwright.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RacYang/briefwright/issues"
+  },
+  "homepage": "https://github.com/RacYang/briefwright#readme",
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "commander": "^14.0.0",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

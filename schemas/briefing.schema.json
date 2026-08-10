@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://briefwright.dev/schemas/briefing.v1.schema.json",
+  "title": "Briefwright briefing intent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "name", "interests"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "preset": {
+      "type": "string",
+      "enum": ["ai-daily"],
+      "default": "ai-daily"
+    },
+    "interests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
+    },
+    "schedule": {
+      "type": "string",
+      "enum": ["manual", "daily-at-10", "weekdays-at-09"],
+      "default": "manual"
+    },
+    "output": {
+      "type": "string",
+      "enum": ["markdown"],
+      "default": "markdown"
+    },
+    "outputDirectory": {
+      "type": "string",
+      "minLength": 1,
+      "default": "briefs"
+    }
+  }
+}
+

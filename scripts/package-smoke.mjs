@@ -19,7 +19,7 @@ if (!parsed.ok || parsed.version !== packageVersion || cliVersion !== packageVer
   throw new Error("Packaged capability or version smoke test failed");
 }
 const listed = execFileSync("tar", ["-tf", path.join(root, tarball)], { encoding: "utf8" });
-for (const required of ["package/policies/", "package/prompts/", "package/providers/", "package/schemas/", "package/skill/briefwright/SKILL.md"]) {
+for (const required of ["package/README.md", "package/README.zh-CN.md", "package/policies/", "package/prompts/", "package/providers/", "package/schemas/", "package/skill/briefwright/SKILL.md"]) {
   if (!listed.includes(required)) throw new Error(`Package is missing ${required}`);
 }
 console.log(JSON.stringify({ ok: true, tarball, project, capabilities: parsed }, null, 2));

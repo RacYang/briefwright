@@ -1,5 +1,4 @@
 interface:
   display_name: "Briefwright"
-  short_description: "Build source-linked auditable briefings"
-  default_prompt: "Use $briefwright to set up or operate a source-linked briefing with a preview-first, human-confirmed workflow."
-
+  short_description: "Build auditable AI intelligence briefings"
+  default_prompt: "Use $briefwright to demo, configure, preview, run, diagnose, schedule, replay, improve, or safely integrate a Briefwright intelligence briefing. Keep ordinary setup to briefing.yaml, use CLI JSON as the source of truth, protect credentials, and require explicit confirmation for native schedules, policy activation, cadence changes, and knowledge writes."

@@ -1,0 +1,10 @@
+{
+  "id": "qwen",
+  "version": "1.0.0",
+  "protocol": "openai-chat-completions",
+  "model": "qwen3.7-flash",
+  "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "apiKey": { "provider": "env", "key": "DASHSCOPE_API_KEY" },
+  "timeoutSeconds": 60,
+  "retries": 2
+}

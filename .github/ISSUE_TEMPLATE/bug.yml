@@ -1,0 +1,21 @@
+name: Bug report
+description: Report reproducible Briefwright behavior
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, private source content, or sensitive paths.
+  - type: input
+    id: version
+    attributes: { label: Briefwright version }
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes: { label: Reproduction steps }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected behavior }
+    validations: { required: true }
+  - type: textarea
+    id: json
+    attributes: { label: Redacted JSON output }

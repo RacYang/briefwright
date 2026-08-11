@@ -42,6 +42,7 @@ export function countReceipts(dueSourceIds: string[], receipts: Receipt[]): Rece
 export type RunOutcome = "success" | "partial" | "failed";
 
 export function runOutcome(counts: ReceiptCounts): RunOutcome {
+  if (counts.due === 0) return "success";
   if (counts.failed === counts.due || counts.missing === counts.due) return "failed";
   if (counts.failed > 0 || counts.missing > 0) return "partial";
   return "success";

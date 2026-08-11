@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { countReceipts } from "../src/core/accounting.js";
+import { countReceipts, runOutcome } from "../src/core/accounting.js";
 
 describe("due-source accounting", () => {
+  it("treats an intentional zero-due run as successful", () => {
+    expect(runOutcome(countReceipts([], []))).toBe("success");
+  });
   it("accounts for exactly one result per due source", () => {
     expect(
       countReceipts(

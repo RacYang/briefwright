@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose a user or operator capability
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: User problem }
+    validations: { required: true }
+  - type: textarea
+    id: boundary
+    attributes: { label: Desired behavior and safety boundary }
+    validations: { required: true }
+  - type: dropdown
+    id: level
+    attributes:
+      label: Experience level
+      options: [Ordinary user, Operator, Connector author]
+    validations: { required: true }

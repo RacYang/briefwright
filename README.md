@@ -1,68 +1,149 @@
 # Briefwright
 
-Briefwright turns public-source snapshots into calm, source-linked, auditable briefings. It is designed for people who want a useful briefing in minutes and for operators who need deterministic receipts, replayable runs, and explicit approval boundaries before future external writes.
+Briefwright builds calm, source-linked AI intelligence briefings from public sources. It keeps the
+first-run experience to one small file while preserving the receipts, evidence gates, policy
+versions, failures, and replay data needed to trust a recurring briefing.
 
-> Status: pre-release. The offline demo, guided initialization, strict intent configuration, local SQLite state, Markdown preview, and initial public-source connectors are working. Scheduling and knowledge-base integration remain disabled.
+## Try it in two minutes
 
-## Product promise
-
-- See the first local briefing within five minutes.
-- Start without an external database, account, or API key.
-- Keep the ordinary user interface to one small intent file.
-- Preserve every due source as exactly one auditable receipt.
-- Never silently turn a failed source into a confirmed fact.
-- Require explicit human approval before writing to a knowledge base.
-
-## Quick start from a checkout
+From a checkout:
 
 ```bash
 pnpm install
-pnpm run build
+pnpm build
 node dist/cli.js demo
 
 mkdir my-briefing
 node dist/cli.js init --yes --directory my-briefing
 node dist/cli.js preview --config my-briefing/briefing.yaml
-node dist/cli.js preview --live --config my-briefing/briefing.yaml
 ```
 
-The default preview uses clearly marked bundled fixtures. `--live` performs read-only network access to the preset's public sources. Each preview writes an immutable, run-named Markdown artifact. Neither command enables a schedule or writes to a knowledge base.
+`demo` and the default `preview` are offline and need no account or API key. They do not install a
+schedule or write to a knowledge base.
 
-The internal system may be sophisticated; the user should only need to answer:
+The generated `briefing.yaml` is the ordinary user interface:
 
-1. What do you care about?
-2. When should the briefing arrive?
-3. Where should it be written?
+```yaml
+version: 2
+name: My AI briefing
+preset: ai-daily
+interests:
+  - AI agents
+  - model releases
+  - AI safety
+schedule: manual
+output: markdown
+outputDirectory: briefs
+ai: qwen
+```
 
-## Architecture direction
+## Run a real briefing with Qwen
 
-Briefwright separates:
+Put a test or production key in an ignored local file—never in `briefing.yaml`:
 
-- a simple user intent file;
-- versioned policy packs;
-- typed source connectors;
-- immutable run snapshots and receipts;
-- state-store and output adapters;
-- an optional Codex Skill as a conversational setup layer.
+```bash
+cp .env.example .env.local
+# edit .env.local and set DASHSCOPE_API_KEY
 
-See the accepted design records in [`docs/rfcs`](docs/rfcs).
+node dist/cli.js doctor --online --config briefing.yaml
+node dist/cli.js run --config briefing.yaml
+```
 
-## Current commands
+The formal run writes separate `Daily` and `Review` artifacts. It freezes its rules and source
+manifest, incrementally collects due sources, records exactly one receipt per due source, validates
+Qwen's structured output, verifies claim support, scores seven dimensions, applies deterministic
+selection gates, and persists an auditable SQLite snapshot.
 
-- `demo`: offline proof with bundled fixtures.
-- `init`: guided or non-interactive creation of one `briefing.yaml`.
-- `preview`: local fixture or live public-source preview.
-- `replay`: offline re-render and hash verification of a recorded run snapshot.
-- `config validate|render|explain`: strict configuration tools.
-- `doctor`: local environment checks.
-- `status`: schedule state and the latest local run summary.
-- `open`: open or print the latest local briefing path.
-- `capabilities`: describe installed features for users and Skills.
+Alibaba Model Studio keys and endpoints are region/workspace/plan specific. If `doctor --online`
+reports model access denied, use `config eject` and set the exact authorized model and endpoint in
+`briefwright.d/profile.yaml`.
 
-Use the global `--json` option for bounded machine-readable output. The Codex Skill in [`skill/briefwright`](skill/briefwright) uses this interface and does not duplicate runtime logic.
+## The uncomplicated path
 
-The package includes the Skill files. Until an installer is added, copy `skill/briefwright` into the Codex skills directory or use it directly from a checkout.
+Most people only need:
 
-## License
+```bash
+briefwright demo
+briefwright init
+briefwright preview
+briefwright doctor --online
+briefwright run
+briefwright status
+briefwright open
+```
 
-Apache License 2.0.
+Set `schedule` in `briefing.yaml` to `daily-at-10` or `weekdays-at-09`, inspect the native definition,
+then explicitly enable it:
+
+```bash
+briefwright schedule describe
+briefwright schedule enable --yes
+```
+
+Briefwright supports launchd on macOS, user cron on Linux, and Task Scheduler on Windows. A manual
+schedule is rejected instead of installing a no-op task.
+
+## Trust and governance
+
+- Primary evidence is required for Daily and Review selection.
+- Unsupported model claims are excluded rather than promoted.
+- Daily uses a score threshold of 70; Review uses 60–69 plus the stable-knowledge-potential gate.
+- Daily allows at most 12 items and three per domain. Empty artifacts are valid.
+- Source failures remain visible and produce partial or failed outcomes.
+- Same-day formal runs are idempotent; interrupted finalization is resumable.
+- `replay` regenerates every recorded artifact offline and checks both the snapshot hash and current
+  disk content.
+- Feedback cannot change policy directly. Experiments require at least 50 reviewed items across 14
+  days, explicit approval, activation, and a rollback path.
+- Knowledge changes are previewed proposals. `knowledge commit --yes` rejects a target that changed
+  after preview.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `demo` | Offline, credential-free demonstration |
+| `init` | Create one intent file without enabling anything |
+| `preview [--live]` | Fixture preview or read-only public-source preview |
+| `run` | Formal incremental AI briefing pipeline |
+| `status`, `open`, `replay` | Inspect and verify durable runs |
+| `config validate|render|explain|diff|migrate|eject` | Typed configuration lifecycle |
+| `db migrate` | Preview or explicitly apply SQLite migrations |
+| `doctor [--online]` | Offline correctness or online provider/source checks |
+| `schedule describe|enable|disable|status` | Native scheduling with confirmation |
+| `feedback add|summary` | Human outcome signals |
+| `experiment create|evaluate|approve|activate|rollback` | Guarded policy improvement |
+| `cadence evaluate|list|approve|reject|lock` | Guarded source-frequency governance |
+| `knowledge propose|commit` | Human-confirmed Markdown/Obsidian integration |
+| `capabilities` | Machine-readable installed feature surface |
+
+Add global `--json` for stable, bounded machine-readable output. The packaged Codex Skill uses this
+surface and owns no separate schema, policy, or durable state.
+
+## Expert configuration
+
+Ordinary users do not need to understand internal resources. When a requirement cannot be expressed
+by the intent file, run:
+
+```bash
+briefwright config eject --yes
+briefwright config validate
+briefwright config explain provider
+```
+
+This creates versioned `Profile`, `PolicyBundle`, `PromptPack`, `Output`, and per-source resources in
+`briefwright.d/`. Unknown fields, unsafe provider endpoints, invalid score weights, broken cadence
+bounds, and unknown source references fail validation. See [configuration](docs/configuration.md).
+
+## Development and design
+
+- [Product experience RFC](docs/rfcs/0001-product-experience.md)
+- [Configuration RFC](docs/rfcs/0002-configuration.md)
+- [Runtime architecture RFC](docs/rfcs/0003-architecture.md)
+- [Complete-system delivery matrix](docs/implementation/complete-system-matrix.md)
+- [Operations](docs/operations.md)
+- [Connector contract](docs/connectors.md)
+- [Security policy](SECURITY.md)
+- [Threat model](docs/threat-model.md)
+
+Licensed under Apache-2.0.

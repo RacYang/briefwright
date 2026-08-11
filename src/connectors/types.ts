@@ -1,10 +1,16 @@
 import type { SourceDefinition } from "../config/types.js";
 
 export interface ConnectorDescriptor {
-  type: SourceDefinition["connector"]["type"];
+  type: string;
   version: string;
   title: string;
   requiresCredentials: boolean;
+  capabilities: string[];
+  owner: string;
+  riskLabels: string[];
+  configSchema: Record<string, unknown>;
+  examples: Array<Record<string, unknown>>;
+  authentication: { required: boolean; secretFields: string[] };
 }
 
 export interface CaptureEnvelope {
@@ -33,5 +39,6 @@ export interface Connector<TSource extends SourceDefinition = SourceDefinition> 
 export interface ConnectorContext {
   fetch(url: string, init?: RequestInit): Promise<Response>;
   now(): Date;
+  cursor?: Record<string, unknown>;
+  setCursor?(value: Record<string, unknown>): void;
 }
-

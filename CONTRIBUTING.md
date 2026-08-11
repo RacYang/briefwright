@@ -6,7 +6,7 @@ Briefwright welcomes focused issues and pull requests. The project is early, so 
 
 Requirements:
 
-- Node.js 24.11 or newer;
+- Node.js 22.13 or newer;
 - pnpm 11.16.
 
 ```bash
@@ -37,5 +37,6 @@ node dist/cli.js demo --directory /tmp/briefwright-demo
 
 ## Connector contributions
 
-The public third-party Connector SDK is not stable yet. Built-in Connector changes must include configuration validation, offline fixtures, network-boundary tests, explicit timeouts, and bounded response handling.
-
+Connector changes must satisfy the documented descriptor and runtime contract, include configuration
+validation, offline fixtures, network-boundary tests, explicit timeouts, conditional-fetch behavior,
+and bounded response handling.

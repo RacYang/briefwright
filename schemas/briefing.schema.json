@@ -7,7 +7,7 @@
   "required": ["version", "name", "interests"],
   "properties": {
     "version": {
-      "const": 1
+      "enum": [1, 2]
     },
     "name": {
       "type": "string",
@@ -44,7 +44,11 @@
       "type": "string",
       "minLength": 1,
       "default": "briefs"
+    },
+    "ai": {
+      "type": "string",
+      "enum": ["qwen"],
+      "default": "qwen"
     }
   }
 }
-

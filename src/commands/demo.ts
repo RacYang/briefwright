@@ -15,16 +15,24 @@ export interface DemoResult {
 
 export async function runDemo(root = path.join(homedir(), ".briefwright", "demo")): Promise<DemoResult> {
   const intent: BriefingIntent = {
-    version: 1,
+    version: 2,
     name: "Briefwright demonstration",
     preset: "ai-daily",
     interests: ["AI agents", "model evaluation", "AI safety"],
     schedule: "manual",
     output: "markdown",
     outputDirectory: "briefs",
+    ai: "qwen",
   };
-  const preset = await loadPreset(intent.preset);
-  const config = buildEffectiveConfig(root, intent, preset);
+  const config = await (async () => {
+    const configPath = path.join(root, "briefing.yaml");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { stringify } = await import("yaml");
+    await mkdir(root, { recursive: true });
+    await writeFile(configPath, stringify(intent), "utf8");
+    const { loadEffectiveConfig } = await import("../config/load.js");
+    return loadEffectiveConfig(configPath);
+  })();
   const result = createFixtureRun(config);
   const markdown = renderMarkdown(config, result);
   const outputPath = path.join(config.output.directory, "briefwright-demo.md");

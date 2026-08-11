@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://briefwright.dev/schemas/resource.v1alpha1.schema.json",
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": { "id": { "type": "string", "minLength": 1 } }
+    },
+    "envelope": {
+      "type": "object",
+      "required": ["apiVersion", "kind", "metadata", "spec"],
+      "properties": {
+        "apiVersion": { "const": "briefwright.dev/v1alpha1" },
+        "kind": { "type": "string" },
+        "metadata": { "$ref": "#/$defs/metadata" },
+        "spec": { "type": "object" }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "apiVersion": true, "metadata": true, "kind": { "const": "Profile" },
+            "spec": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "runtime": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "httpConcurrency": { "type": "integer", "minimum": 1, "maximum": 32 },
+                    "modelConcurrency": { "type": "integer", "minimum": 1, "maximum": 8 },
+                    "maximumCapturesPerRun": { "type": "integer", "minimum": 1, "maximum": 500 },
+                    "retries": { "type": "integer", "minimum": 0, "maximum": 8 },
+                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 }
+                  }
+                },
+                "provider": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "model": { "type": "string", "minLength": 1 },
+                    "baseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+                    "apiKey": {
+                      "type": "object", "additionalProperties": false, "required": ["provider", "key"],
+                      "properties": { "provider": { "enum": ["env", "file"] }, "key": { "type": "string", "minLength": 1 } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "PolicyBundle" }, "spec": { "type": "object" } } }
+      ]
+    },
+    {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "PromptPack" }, "spec": { "type": "object" } } }
+      ]
+    },
+    {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "Output" }, "spec": { "type": "object", "additionalProperties": false, "required": ["directory"], "properties": { "directory": { "type": "string", "minLength": 1 } } } } }
+      ]
+    },
+    {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "Source" }, "spec": { "type": "object", "additionalProperties": false, "properties": { "enabled": { "type": "boolean" }, "title": { "type": "string" }, "domain": { "type": "string" }, "cadence": { "type": "object" }, "connector": { "type": "object" } } } } }
+      ]
+    }
+  ]
+}

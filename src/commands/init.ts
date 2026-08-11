@@ -63,13 +63,14 @@ export async function initializeProject(options: InitOptions): Promise<string> {
   }
 
   const intent: BriefingIntent = {
-    version: 1,
+    version: 2,
     name,
     preset: "ai-daily",
     interests,
     schedule: "manual",
     output: "markdown",
     outputDirectory: "briefs",
+    ai: "qwen",
   };
 
   await mkdir(root, { recursive: true });

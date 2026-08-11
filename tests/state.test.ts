@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { buildEffectiveConfig, loadPreset } from "../src/config/load.js";
+import { buildEffectiveConfig, loadPackagedRuntime } from "../src/config/load.js";
 import type { BriefingIntent } from "../src/config/types.js";
 import { createFixtureRun } from "../src/core/fixture.js";
 import { SqliteStateStore } from "../src/state/sqlite.js";
@@ -12,17 +12,18 @@ import { SqliteStateStore } from "../src/state/sqlite.js";
 describe("SQLite state", () => {
   it("keeps finalized runs immutable and rejects reuse with a different config", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-state-"));
-    const preset = await loadPreset("ai-daily");
     const baseIntent: BriefingIntent = {
-      version: 1,
+      version: 2,
       name: "Test",
       preset: "ai-daily",
       interests: ["AI agents"],
       schedule: "manual",
       output: "markdown",
       outputDirectory: "briefs",
+      ai: "qwen",
     };
-    const firstConfig = buildEffectiveConfig(root, baseIntent, preset);
+    const resources = await loadPackagedRuntime(baseIntent);
+    const firstConfig = buildEffectiveConfig(root, baseIntent, resources.preset, resources.policy, resources.prompts, resources.provider);
     const firstRun = createFixtureRun(firstConfig, new Date("2026-08-10T00:00:00Z"));
     const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"), root);
 
@@ -33,7 +34,10 @@ describe("SQLite state", () => {
       const changedConfig = buildEffectiveConfig(
         root,
         { ...baseIntent, interests: ["AI safety"] },
-        preset,
+        resources.preset,
+        resources.policy,
+        resources.prompts,
+        resources.provider,
       );
       const changedRun = createFixtureRun(changedConfig, new Date("2026-08-10T01:00:00Z"));
       expect(changedRun.runId).not.toBe(firstRun.runId);

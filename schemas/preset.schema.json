@@ -23,6 +23,17 @@
         "properties": {
           "id": { "type": "string", "pattern": "^SRC-[A-Z0-9-]+$" },
           "title": { "type": "string", "minLength": 1 },
+          "domain": { "type": "string", "minLength": 1 },
+          "cadence": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["minimumHours", "defaultHours", "maximumHours"],
+            "properties": {
+              "minimumHours": { "type": "number", "exclusiveMinimum": 0 },
+              "defaultHours": { "type": "number", "exclusiveMinimum": 0 },
+              "maximumHours": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
           "connector": {
             "oneOf": [
               {
@@ -50,6 +61,23 @@
                     "additionalProperties": false,
                     "required": ["url"],
                     "properties": { "url": { "type": "string", "format": "uri", "pattern": "^https://" } }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "config"],
+                "properties": {
+                  "type": { "const": "extension" },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["adapter", "options"],
+                    "properties": {
+                      "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                      "options": { "type": "object" }
+                    }
                   }
                 }
               }

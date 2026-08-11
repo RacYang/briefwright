@@ -1,0 +1,33 @@
+{
+  "id": "ai-intelligence",
+  "version": "1.0.0",
+  "rules": [
+    { "id": "RULE-WORKFLOW-V1.3", "version": "1.3", "title": "Workflow and run integrity" },
+    { "id": "RULE-SCORE-V1.0", "version": "1.0", "title": "Seven-dimension score" },
+    { "id": "RULE-SELECTION-V1.1", "version": "1.1", "title": "Daily and Review selection" },
+    { "id": "RULE-SOURCE-V1.1", "version": "1.1", "title": "Source and cadence governance" },
+    { "id": "RULE-IMPROVEMENT-V1.0", "version": "1.0", "title": "Feedback and experiments" },
+    { "id": "RULE-RETENTION-V1.0", "version": "1.0", "title": "Evidence retention and quotation" },
+    { "id": "RULE-REVIEW-OUTPUT-V1.1", "version": "1.1", "title": "Review artifact requirements" }
+  ],
+  "score": {
+    "dimensions": [
+      { "id": "authority", "weight": 0.15 },
+      { "id": "evidence", "weight": 0.20 },
+      { "id": "relevance", "weight": 0.15 },
+      { "id": "impact", "weight": 0.20 },
+      { "id": "novelty", "weight": 0.15 },
+      { "id": "recency", "weight": 0.05 },
+      { "id": "actionability", "weight": 0.10 }
+    ],
+    "dailyThreshold": 70,
+    "reviewMinimum": 60,
+    "dailyMaximum": 12,
+    "perDomainMaximum": 3
+  },
+  "domains": [
+    "foundation-models", "agents", "developer-tools", "multimodal", "safety-governance",
+    "research", "industry-products", "china-ecosystem"
+  ],
+  "retention": { "quoteWordLimit": 25 }
+}

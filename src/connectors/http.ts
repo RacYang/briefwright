@@ -3,6 +3,17 @@ import type { LookupFunction } from "node:net";
 
 import ipaddr from "ipaddr.js";
 import { Agent } from "undici";
+import type { SourceDefinition } from "../config/types.js";
+
+export function allowedHostsForSource(source: SourceDefinition): string[] {
+  if (source.connector.type === "github-releases") return ["api.github.com"];
+  if (source.connector.type === "rss") return [new URL(source.connector.config.url).hostname];
+  const value = source.connector.config.options.allowedHosts;
+  if (!Array.isArray(value) || !value.length || value.some((host) => typeof host !== "string" || !/^[A-Za-z0-9.-]+$/.test(host))) {
+    throw new Error(`Extension source ${source.id} must declare options.allowedHosts`);
+  }
+  return value as string[];
+}
 
 function normalizedHostname(hostname: string): string {
   return hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
@@ -82,11 +93,15 @@ export function createHttpClient(options: {
           },
           dispatcher: secureDispatcher,
         } as RequestInit & { dispatcher: Agent });
-        if (response.status >= 500 && attempt < options.retries) continue;
+        if (response.status >= 500 && attempt < options.retries) {
+          await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
+          continue;
+        }
         return response;
       } catch (error) {
         lastError = error;
         if (attempt === options.retries) break;
+        await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
       }
     }
 

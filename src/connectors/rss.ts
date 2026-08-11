@@ -28,13 +28,13 @@ function list<T>(value: T | T[] | undefined): T[] {
 }
 
 function stripMarkup(value: string | undefined): string {
-  return (value ?? "")
+  const plain = (value ?? "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 500);
+    .trim();
+  return plain.split(/\s+/u).slice(0, 25).join(" ").slice(0, 500);
 }
 
 function itemUrl(item: FeedItem): string | undefined {
@@ -49,6 +49,12 @@ export class RssConnector implements Connector<RssSource> {
     version: "1.0.0",
     title: "RSS and Atom",
     requiresCredentials: false,
+    capabilities: ["capture", "conditional-fetch", "rss", "atom"],
+    owner: "briefwright-core",
+    riskLabels: ["untrusted-xml", "external-links"],
+    configSchema: { type: "object", additionalProperties: false, required: ["url"], properties: { url: { type: "string", format: "uri", pattern: "^https://" } } },
+    examples: [{ url: "https://example.com/feed.xml" }],
+    authentication: { required: false, secretFields: [] },
   };
 
   async check(source: RssSource, context: ConnectorContext) {
@@ -64,9 +70,21 @@ export class RssConnector implements Connector<RssSource> {
   async capture(source: RssSource, context: ConnectorContext): Promise<CaptureEnvelope[]> {
     assertPublicHttpsUrl(source.connector.config.url);
     const response = await context.fetch(source.connector.config.url, {
-      headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
+      headers: {
+        accept: "application/rss+xml, application/atom+xml, application/xml, text/xml",
+        ...(typeof context.cursor?.etag === "string" ? { "if-none-match": context.cursor.etag } : {}),
+        ...(typeof context.cursor?.lastModified === "string" ? { "if-modified-since": context.cursor.lastModified } : {}),
+      },
     });
+    if (response.status === 304) {
+      context.setCursor?.({ notModified: true });
+      return [];
+    }
     if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
+    context.setCursor?.({
+      ...(response.headers.get("etag") ? { etag: response.headers.get("etag")! } : {}),
+      ...(response.headers.get("last-modified") ? { lastModified: response.headers.get("last-modified")! } : {}),
+    });
     const xml = await readTextLimited(response, 5 * 1024 * 1024);
     const parser = new XMLParser({ ignoreAttributes: false, trimValues: true });
     const parsed = parser.parse(xml) as {
@@ -78,7 +96,7 @@ export class RssConnector implements Connector<RssSource> {
       ...list(parsed.feed?.entry),
     ];
 
-    return items.flatMap((item) => {
+    return items.slice(0, 20).flatMap((item) => {
       const rawUrl = itemUrl(item);
       const title = stripMarkup(item.title);
       if (!rawUrl || !title) return [];

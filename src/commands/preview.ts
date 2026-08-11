@@ -7,7 +7,7 @@ import { createLiveRun } from "../core/live.js";
 import { countReceipts, runOutcome, type ReceiptCounts, type RunOutcome } from "../core/accounting.js";
 import type { Receipt } from "../core/types.js";
 import { renderMarkdown } from "../outputs/markdown.js";
-import { writeArtifactAtomic } from "../outputs/write.js";
+import { writeArtifactSetAtomic } from "../outputs/write.js";
 import { SqliteStateStore } from "../state/sqlite.js";
 
 export interface PreviewResult {
@@ -33,12 +33,11 @@ export async function previewProject(
   const state = new SqliteStateStore(config.storage.path, config.projectRoot);
   try {
     state.assertRunWritable(result);
-    await writeArtifactAtomic(config.projectRoot, outputPath, markdown);
-    state.saveRun(config, result, {
-      kind: "preview-markdown",
-      path: outputPath,
-      contentHash: createHash("sha256").update(markdown).digest("hex"),
-    });
+    await writeArtifactSetAtomic(config.projectRoot, [{ path: outputPath, content: markdown }], () => state.saveRun(config, result, {
+        kind: "preview-markdown",
+        path: outputPath,
+        contentHash: createHash("sha256").update(markdown).digest("hex"),
+      }));
   } finally {
     state.close();
   }

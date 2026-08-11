@@ -9,5 +9,5 @@ briefs/
 *.db
 *.db-shm
 *.db-wal
+*.tgz
 .DS_Store
-

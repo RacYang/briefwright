@@ -4,14 +4,21 @@ import path from "node:path";
 
 import { Command } from "commander";
 
-import { explainConfiguration, renderConfiguration, validateConfiguration } from "./commands/config.js";
+import { diffConfiguration, ejectConfiguration, explainConfiguration, renderConfiguration, validateConfiguration } from "./commands/config.js";
+import { decideProjectCadence, evaluateProjectCadence, listCadenceProposals, lockSourceCadence } from "./commands/cadence.js";
 import { runDemo } from "./commands/demo.js";
 import { runDoctor } from "./commands/doctor.js";
+import { addProjectFeedback, projectFeedbackSummary } from "./commands/feedback.js";
 import { initializeProject } from "./commands/init.js";
+import { commitKnowledge, proposeKnowledge } from "./commands/knowledge.js";
+import { createPolicyExperiment, evaluatePolicyExperiment, transitionPolicyExperiment } from "./commands/experiment.js";
+import { migrateConfiguration, migrateProjectDatabase } from "./commands/migrate.js";
 import { latestArtifactPath, launchArtifact } from "./commands/open.js";
 import { previewProject } from "./commands/preview.js";
 import { verifyReplay } from "./commands/replay.js";
 import { projectStatus } from "./commands/status.js";
+import { describeSchedule, disableProjectSchedule, enableSchedule, scheduleStatus } from "./commands/schedule.js";
+import { runFormalProject } from "./core/run.js";
 import { ConfigurationError } from "./config/load.js";
 
 const program = new Command();
@@ -28,7 +35,7 @@ function writeJson(value: unknown): void {
 program
   .name("briefwright")
   .description("Source-linked, auditable intelligence briefings without the setup wall.")
-  .version("0.1.0-alpha.1")
+  .version("0.2.0")
   .option("--json", "emit bounded machine-readable output", false);
 
 if (jsonRequested) program.exitOverride();
@@ -108,6 +115,42 @@ program
     if (result.outcome === "failed") process.exitCode = 1;
   });
 
+program
+  .command("run")
+  .description("Execute the formal incremental briefing pipeline with the configured AI provider.")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await runFormalProject(config);
+    if (isJsonOutput()) {
+      writeJson({
+        ok: result.outcome !== "failed",
+        command: "run",
+        runId: result.runId,
+        outcome: result.outcome,
+        resumed: result.resumed,
+        alreadyComplete: result.alreadyComplete,
+        dailyPath: result.dailyPath,
+        reviewPath: result.reviewPath,
+        counts: result.result.receipts.reduce((counts, receipt) => ({ ...counts, [receipt.result]: (counts[receipt.result] ?? 0) + 1 }), {} as Record<string, number>),
+        modelFailures: result.result.modelFailures ?? [],
+        selected: { daily: result.result.daily.length, review: result.result.review.length, machineOnly: result.result.machineOnly?.length ?? 0 },
+        domains: [...new Set([...result.result.daily, ...result.result.review].map((item) => item.domain).filter(Boolean))],
+        ruleIds: result.result.ruleIds,
+        stageTimings: result.result.stageTimings,
+        integrityValidated: result.result.integrityValidated,
+        cadenceGovernance: result.result.cadenceGovernance,
+      });
+      if (result.outcome === "failed") process.exitCode = 1;
+      return;
+    }
+    console.log(`${result.alreadyComplete ? "Formal run already complete" : "Formal run complete"}: ${result.runId}`);
+    console.log(`Outcome: ${result.outcome}`);
+    console.log(`Daily: ${result.dailyPath}`);
+    console.log(`Review: ${result.reviewPath}`);
+    for (const failure of result.result.modelFailures ?? []) console.log(`MODEL FAILED ${failure.sourceId}: ${failure.detail}`);
+    if (result.outcome === "failed") process.exitCode = 1;
+  });
+
 const configCommand = program.command("config").description("Validate and explain compiled configuration.");
 
 configCommand
@@ -147,12 +190,215 @@ configCommand
     console.log(explanation);
   });
 
+configCommand
+  .command("migrate")
+  .description("Preview or write a versioned briefing.yaml migration.")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .option("--write", "write the migration and create a backup", false)
+  .action(async ({ config, write }: { config: string; write: boolean }) => {
+    const result = await migrateConfiguration(config, write);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "config migrate", ...result });
+    console.log(result.changed ? `${write ? "Migrated" : "Migration available"}: v${result.fromVersion} -> v${result.toVersion}` : "Configuration is current.");
+    if (!write && result.changed) console.log(result.preview);
+    if (result.backupPath) console.log(`Backup: ${result.backupPath}`);
+  });
+
+configCommand
+  .command("eject")
+  .description("Generate fully typed expert resources; ordinary users do not need this.")
+  .requiredOption("--yes", "confirm creation of briefwright.d")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const files = await ejectConfiguration(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "config eject", files });
+    console.log(`Generated ${files.length} expert resource files in briefwright.d.`);
+  });
+
+configCommand
+  .command("diff")
+  .requiredOption("--against <path>", "another briefing.yaml")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config, against }: { config: string; against: string }) => {
+    const changes = await diffConfiguration(config, against);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "config diff", changes });
+    console.log(changes.length ? changes.map((change) => `${change.field}: ${JSON.stringify(change.left)} -> ${JSON.stringify(change.right)}`).join("\n") : "No semantic differences.");
+  });
+
+const dbCommand = program.command("db").description("Inspect and migrate local durable state.");
+dbCommand
+  .command("migrate")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .option("--write", "apply pending migrations and create a backup", false)
+  .action(async ({ config, write }: { config: string; write: boolean }) => {
+    const result = await migrateProjectDatabase(config, write);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "db migrate", ...result });
+    console.log(`Database schema: ${result.current}/${result.latest}`);
+    console.log(result.applied.length ? `Applied: ${result.applied.join(", ")}` : `Pending: ${result.pending.map((item) => item.version).join(", ") || "none"}`);
+    if ("backupPath" in result && result.backupPath) console.log(`Backup: ${result.backupPath}`);
+  });
+
+const feedbackCommand = program.command("feedback").description("Record human outcome signals without changing policy automatically.");
+feedbackCommand.command("add")
+  .argument("<item-id>")
+  .requiredOption("--type <type>", "reviewed, used, ignored, or knowledge-worthy")
+  .option("--note <text>")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (itemId: string, options: { type: string; note?: string; config: string }) => {
+    const allowed = ["reviewed", "used", "ignored", "knowledge-worthy"] as const;
+    if (!allowed.includes(options.type as typeof allowed[number])) throw new Error(`Unknown feedback type: ${options.type}`);
+    const result = await addProjectFeedback(options.config, itemId, options.type as typeof allowed[number], options.note);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "feedback add", itemId, type: options.type, ...result });
+    console.log(`Recorded ${options.type} feedback for ${itemId}: ${result.feedbackId}`);
+  });
+feedbackCommand.command("summary")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await projectFeedbackSummary(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "feedback summary", ...result });
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+const experimentCommand = program.command("experiment").description("Evaluate policy changes against durable feedback before activation.");
+experimentCommand.command("create")
+  .requiredOption("--candidate <path>", "candidate policy JSON")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ candidate, config }: { candidate: string; config: string }) => {
+    const result = await createPolicyExperiment(config, candidate);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "experiment create", ...result });
+    console.log(`Created policy experiment: ${result.experimentId}`);
+  });
+experimentCommand.command("evaluate")
+  .argument("<experiment-id>")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (id: string, { config }: { config: string }) => {
+    const result = await evaluatePolicyExperiment(config, id);
+    if (isJsonOutput()) return writeJson({ ok: result.eligible, command: "experiment evaluate", experimentId: id, ...result });
+    console.log(`${result.eligible ? "ELIGIBLE" : "NOT ELIGIBLE"} ${id}`);
+    console.log(JSON.stringify(result.metrics, null, 2));
+    if (!result.eligible) process.exitCode = 2;
+  });
+for (const action of ["approve", "activate", "rollback"] as const) {
+  experimentCommand.command(action)
+    .argument("<experiment-id>")
+    .requiredOption("--yes", `confirm ${action}`)
+    .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+    .action(async (id: string, { config }: { config: string }) => {
+      const result = await transitionPolicyExperiment(config, id, action);
+      if (isJsonOutput()) return writeJson({ ok: true, command: `experiment ${action}`, experimentId: id, status: result.status });
+      console.log(`${id}: ${result.status}`);
+    });
+}
+
+const knowledgeCommand = program.command("knowledge").description("Preview and explicitly commit bounded knowledge-note changes.");
+knowledgeCommand.command("propose")
+  .argument("<item-id>")
+  .requiredOption("--target <relative-path>", "Markdown target inside the project")
+  .option("--heading <markdown-heading>", "existing heading under which to insert")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (itemId: string, options: { target: string; heading?: string; config: string }) => {
+    const result = await proposeKnowledge(options.config, itemId, options.target, options.heading);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge propose", itemId, committed: false, ...result });
+    console.log(`Proposal: ${result.proposalId}`);
+    console.log(`Preview: ${result.previewPath}`);
+    console.log(`Target: ${result.targetPath}`);
+    console.log(`Nothing was written to the knowledge target. Review, then run 'briefwright knowledge commit ${result.proposalId} --yes'.`);
+  });
+knowledgeCommand.command("commit")
+  .argument("<proposal-id>")
+  .requiredOption("--yes", "confirm the exact proposed write")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (proposalId: string, { config }: { config: string }) => {
+    const result = await commitKnowledge(config, proposalId);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge commit", committed: true, ...result });
+    console.log(`Committed ${proposalId} to ${result.targetPath}`);
+  });
+
+const scheduleCommand = program.command("schedule").description("Describe or explicitly manage a native user schedule.");
+scheduleCommand.command("describe")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .option("--platform <platform>", "darwin, linux, or win32")
+  .action(async ({ config, platform }: { config: string; platform?: "darwin" | "linux" | "win32" }) => {
+    const { definition } = await describeSchedule(config, platform);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "schedule describe", installed: false, definition });
+    console.log(definition.native);
+    console.log("Nothing was installed.");
+  });
+scheduleCommand.command("enable")
+  .requiredOption("--yes", "confirm native schedule installation")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await enableSchedule(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "schedule enable", installed: true, ...result });
+    console.log(`Enabled ${result.scheduleId} at ${result.location}`);
+  });
+scheduleCommand.command("disable")
+  .requiredOption("--yes", "confirm native schedule removal")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await disableProjectSchedule(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "schedule disable", ...result });
+    console.log(`Disabled ${result.scheduleId}`);
+  });
+scheduleCommand.command("status")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await scheduleStatus(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "schedule status", ...result });
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+const cadenceCommand = program.command("cadence").description("Review source-cadence proposals with hysteresis and human locks.");
+cadenceCommand.command("evaluate")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await evaluateProjectCadence(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "cadence evaluate", ...result });
+    console.log(JSON.stringify(result, null, 2));
+  });
+cadenceCommand.command("list")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await listCadenceProposals(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "cadence list", proposals: result });
+    console.log(JSON.stringify(result, null, 2));
+  });
+for (const decision of ["approve", "reject"] as const) cadenceCommand.command(decision)
+  .argument("<proposal-id>")
+  .requiredOption("--yes", `confirm ${decision}`)
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (id: string, { config }: { config: string }) => {
+    const result = await decideProjectCadence(config, id, decision);
+    if (isJsonOutput()) return writeJson({ ok: true, command: `cadence ${decision}`, ...result });
+    console.log(`${result.id}: ${result.status}`);
+  });
+cadenceCommand.command("lock")
+  .argument("<source-id>")
+  .requiredOption("--yes", "confirm human cadence lock")
+  .option("--unlock", "remove the human cadence lock", false)
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (sourceId: string, { config, unlock }: { config: string; unlock: boolean }) => {
+    const result = await lockSourceCadence(config, sourceId, !unlock);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "cadence lock", ...result });
+    console.log(`${sourceId}: ${result.locked ? "locked" : "unlocked"}`);
+  });
+
+program.command("enable")
+  .description("Enable the configured schedule after explicit confirmation.")
+  .requiredOption("--yes", "confirm native schedule installation")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await enableSchedule(config);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "enable", installed: true, ...result });
+    console.log(`Enabled ${result.scheduleId} at ${result.location}`);
+  });
+
 program
   .command("doctor")
   .description("Check configuration and the local runtime environment.")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
-  .action(async ({ config }: { config: string }) => {
-    const checks = await runDoctor(config);
+  .option("--online", "also call the configured provider and source endpoints", false)
+  .action(async ({ config, online }: { config: string; online: boolean }) => {
+    const checks = await runDoctor(config, { online });
     if (isJsonOutput()) {
       writeJson({ ok: checks.every((check) => check.ok), command: "doctor", checks });
       if (checks.some((check) => !check.ok)) process.exitCode = 1;
@@ -225,15 +471,21 @@ program
   .description("Describe the installed CLI surface and safety-relevant feature state.")
   .action(() => {
     const capabilities = {
-      version: "0.1.0-alpha.1",
-      commands: ["demo", "init", "preview", "replay", "status", "open", "doctor", "config"],
+      version: "0.2.0",
+      commands: ["demo", "init", "preview", "run", "replay", "status", "open", "doctor", "config", "db", "schedule", "feedback", "experiment", "knowledge"],
       connectors: ["rss", "github-releases"],
+      providers: ["qwen", "fixture"],
       presets: ["ai-daily"],
       fixturePreview: true,
       livePreview: true,
-      scheduling: false,
+      formalRuns: true,
+      incrementalCursors: true,
+      dailyReviewSelection: true,
+      replayAllArtifacts: true,
+      feedbackExperiments: true,
+      scheduling: true,
       externalDestinations: false,
-      knowledgeWrites: false,
+      knowledgeWrites: true,
     };
     if (isJsonOutput()) {
       writeJson({ ok: true, command: "capabilities", ...capabilities });

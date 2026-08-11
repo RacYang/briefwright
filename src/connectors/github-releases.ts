@@ -25,7 +25,7 @@ function summary(body: string | null): string {
     .replace(/[#>*_`\[\]()]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return plain.slice(0, 500);
+  return plain.split(/\s+/u).slice(0, 25).join(" ").slice(0, 500);
 }
 
 export class GithubReleasesConnector implements Connector<GithubSource> {
@@ -34,13 +34,19 @@ export class GithubReleasesConnector implements Connector<GithubSource> {
     version: "1.0.0",
     title: "GitHub releases",
     requiresCredentials: false,
+    capabilities: ["capture", "conditional-fetch", "releases"],
+    owner: "briefwright-core",
+    riskLabels: ["external-markdown", "rate-limited"],
+    configSchema: { type: "object", additionalProperties: false, required: ["repository"], properties: { repository: { type: "string", pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" } } },
+    examples: [{ repository: "QwenLM/qwen-code" }],
+    authentication: { required: false, secretFields: [] },
   };
 
   private apiUrl(source: GithubSource): string {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(source.connector.config.repository)) {
       throw new Error(`Invalid GitHub repository: ${source.connector.config.repository}`);
     }
-    return `https://api.github.com/repos/${source.connector.config.repository}/releases?per_page=10`;
+    return `https://api.github.com/repos/${source.connector.config.repository}/releases?per_page=5`;
   }
 
   async check(source: GithubSource, context: ConnectorContext) {
@@ -54,9 +60,21 @@ export class GithubReleasesConnector implements Connector<GithubSource> {
 
   async capture(source: GithubSource, context: ConnectorContext): Promise<CaptureEnvelope[]> {
     const response = await context.fetch(this.apiUrl(source), {
-      headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
+      headers: {
+        accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28",
+        ...(typeof context.cursor?.etag === "string" ? { "if-none-match": context.cursor.etag } : {}),
+        ...(typeof context.cursor?.lastModified === "string" ? { "if-modified-since": context.cursor.lastModified } : {}),
+      },
     });
+    if (response.status === 304) {
+      context.setCursor?.({ notModified: true });
+      return [];
+    }
     if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
+    context.setCursor?.({
+      ...(response.headers.get("etag") ? { etag: response.headers.get("etag")! } : {}),
+      ...(response.headers.get("last-modified") ? { lastModified: response.headers.get("last-modified")! } : {}),
+    });
     const releases = await readJsonLimited<GithubRelease[]>(response, 2 * 1024 * 1024);
     return releases
       .filter((release) => !release.draft && !release.prerelease)

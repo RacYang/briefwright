@@ -15,6 +15,18 @@ export interface BriefingItem {
   url: string;
   evidence: "primary" | "secondary" | "unverified";
   score: number;
+  domain?: string;
+  disposition?: "daily" | "review" | "machine-only";
+  scoreDimensions?: Record<string, { value: number; weight: number; weighted: number; reason: string }>;
+  claims?: string[];
+  evidenceStatus?: "confirmed-primary" | "secondary-clue" | "unverified" | "inaccessible";
+  knowledgePotential?: {
+    reusableQuestion: boolean;
+    mechanismIncrement: boolean;
+    durableWithoutVersion: boolean;
+    reason: string;
+  };
+  exclusionReasons?: string[];
 }
 
 export interface RunResult {
@@ -25,4 +37,11 @@ export interface RunResult {
   receipts: Receipt[];
   daily: BriefingItem[];
   review: BriefingItem[];
+  machineOnly?: BriefingItem[];
+  runKind?: "preview" | "formal";
+  ruleIds?: string[];
+  modelFailures?: Array<{ captureId: string; sourceId: string; detail: string }>;
+  stageTimings?: Record<string, number>;
+  integrityValidated?: boolean;
+  cadenceGovernance?: { evaluated: boolean; reason: string; proposals: string[] };
 }

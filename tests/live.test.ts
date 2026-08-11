@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { buildEffectiveConfig, loadPreset } from "../src/config/load.js";
+import { buildEffectiveConfig, loadPackagedRuntime } from "../src/config/load.js";
 import type { BriefingIntent } from "../src/config/types.js";
 import { countReceipts, runOutcome } from "../src/core/accounting.js";
 import { createLiveRun } from "../src/core/live.js";
@@ -12,15 +12,17 @@ import { createLiveRun } from "../src/core/live.js";
 async function config() {
   const root = await mkdtemp(path.join(tmpdir(), "briefwright-live-"));
   const intent: BriefingIntent = {
-    version: 1,
+    version: 2,
     name: "Live test",
     preset: "ai-daily",
     interests: ["AI agents"],
     schedule: "manual",
     output: "markdown",
     outputDirectory: "briefs",
+    ai: "qwen",
   };
-  return buildEffectiveConfig(root, intent, await loadPreset("ai-daily"));
+  const resources = await loadPackagedRuntime(intent);
+  return buildEffectiveConfig(root, intent, resources.preset, resources.policy, resources.prompts, resources.provider);
 }
 
 describe("live preview outcomes", () => {

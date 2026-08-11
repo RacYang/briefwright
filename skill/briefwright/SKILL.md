@@ -1,88 +1,101 @@
 ---
 name: briefwright
-description: Set up, preview, explain, diagnose, and operate Briefwright source-linked intelligence briefings. Use when a user wants a recurring research briefing, news or release monitor, source-backed digest, Briefwright project, or help with Briefwright configuration and receipts.
+description: Create and operate source-linked AI intelligence briefings with Briefwright. Use for recurring research briefings, release monitoring, auditable digests, Qwen-backed Daily and Review reports, briefing diagnostics, feedback, scheduling, replay, or human-approved knowledge integration.
 ---
 
 # Briefwright
 
-Use the installed `briefwright` CLI as the only execution and configuration authority. This Skill is a conversational setup and explanation layer; it does not duplicate schemas, policies, state transitions, scoring, or durable state.
+Use the installed `briefwright` CLI as the only schema, policy, execution, and durable-state
+authority. This Skill supplies a conversational path; it must not emulate the runtime or edit SQLite.
 
-## First check
+## Start with the smallest path
 
-Resolve the CLI with `command -v briefwright`. If it is unavailable, explain that Briefwright must be installed before project operations. Do not invent CLI output or emulate the runtime from this file.
+1. Resolve `briefwright` with `command -v briefwright`.
+2. Read `briefwright --json capabilities`.
+3. For evaluation, run `briefwright --json demo`.
+4. For a project, collect only name and interests, then run
+   `briefwright --json init --yes --name <name> --interest <topics...>`.
+5. Run `briefwright --json preview` and summarize the artifact, receipt counts, and failures.
+6. Do not enable a schedule or knowledge write during setup.
 
-Read `briefwright --json capabilities` before using optional features. If `scheduling`, `externalDestinations`, or `knowledgeWrites` is false, report that boundary instead of improvising an alternative implementation.
+Ordinary users maintain only `briefing.yaml`. Do not ask them for rule IDs, score weights, database
+tables, connector internals, concurrency, digests, or prompt schemas.
 
-## Default user path
+## Qwen credential boundary
 
-Keep ordinary users on this sequence:
+Formal `run` needs the configured Qwen secret reference. Prefer an existing process environment
+variable. Otherwise tell the user to put `DASHSCOPE_API_KEY` in the project's ignored `.env.local`
+file. Never ask them to paste a secret into chat, never display the value, and never put it in
+`briefing.yaml`.
 
-1. `briefwright --json demo`
-2. `briefwright --json init --yes`
-3. `briefwright --json preview`
-4. `briefwright --json doctor`
-5. `briefwright --json status`
-6. Use `briefwright --json replay <run-id>` when provenance needs verification.
-7. Show a bounded human-readable summary.
-8. Enable scheduling only when the installed CLI exposes an enable capability and the user explicitly confirms its exact schedule and destinations.
+Use `briefwright --json doctor --online` before the first formal run. A 401/403 model failure can mean
+the key, region, workspace, model, or plan endpoint does not match. Report that precise boundary; do
+not repeatedly probe models or silently switch billing endpoints. Expert endpoint/model changes use
+`briefwright config eject --yes`, followed by `config validate` and `config explain provider`.
 
-Prefer fixture preview for a first experience. Use `briefwright --json preview --live` only when the user asks for current source reads or accepts that the command will access the network.
+## Formal run
 
-## Questions
+After online doctor passes, run `briefwright --json run` and report:
 
-Ask only for choices that cannot be safely inferred:
+- run ID and success/partial/failed outcome;
+- Daily and Review paths;
+- updated, unchanged, failed, skipped, and missing source counts;
+- model failures and their affected source IDs;
+- whether the run was resumed or already complete.
 
-- what the briefing should watch;
-- when it should run;
-- where it should write.
+Never translate a failed source or unsupported model claim into a confirmed fact. Empty Daily or
+Review artifacts are valid.
 
-Use recommended defaults for everything else. Do not ask ordinary users to select a database, connector implementation, scoring weight, Rule ID, concurrency value, table identifier, or digest algorithm.
+## Explain and repair
 
-## Confirmation boundaries
-
-Preview and doctor are read-only except for local preview artifacts and local Briefwright state. Before any command that creates or changes a schedule, sends to an external destination, publishes, overwrites an existing artifact, installs a plugin, or writes to a knowledge base:
-
-1. render the effective configuration with secrets redacted;
-2. summarize schedule, source count, destinations, permissions, and last successful preview;
-3. obtain explicit confirmation for the exact action;
-4. invoke the CLI rather than performing the action directly.
-
-Never treat a request for a briefing as implicit approval for external publishing or knowledge-base writes.
-
-## Errors and partial runs
-
-Parse bounded JSON output. Explain:
-
-- what failed;
-- what remained successful;
-- what the failure affected;
-- the next concrete CLI command;
-- where detailed status can be inspected.
-
-Do not turn a failed or inaccessible canonical source into a confirmed fact. Do not replace it silently with a secondary source. A partial run may still have a useful artifact; preserve its failure scope.
-
-## Configuration
-
-Ordinary users maintain only `briefing.yaml`. For explanation and diagnostics, use:
+Use the CLI before editing:
 
 ```bash
 briefwright --json config validate
 briefwright --json config render
 briefwright --json config explain <field>
 briefwright --json doctor
+briefwright --json status
+briefwright --json replay <run-id>
 ```
 
-Do not edit generated effective configuration or SQLite state. Do not expose secrets. Do not recommend expert configuration unless the user's requirement cannot be expressed by the intent file and presets.
+For a v1 intent or older database, preview migration first. Apply only after explaining the backup:
+
+```bash
+briefwright --json config migrate
+briefwright --json config migrate --write
+briefwright --json db migrate
+briefwright --json db migrate --write
+```
+
+## Confirmation boundaries
+
+Before a native schedule, policy activation/rollback, cadence decision, or knowledge commit:
+
+1. render the effective configuration with references redacted;
+2. summarize the exact target, schedule, sources, and permissions;
+3. obtain explicit confirmation;
+4. invoke the matching CLI command with `--yes`.
+
+For schedules, call `schedule describe` before `schedule enable --yes`. For knowledge, call
+`knowledge propose` and show its preview path before `knowledge commit <id> --yes`. Never write the
+knowledge target directly.
+
+## Feedback and improvement
+
+Record only feedback the user actually gives:
+
+```bash
+briefwright --json feedback add <item-id> --type reviewed|used|ignored|knowledge-worthy
+briefwright --json feedback summary
+```
+
+Do not optimize policy directly from conversation. The experiment CLI enforces the 14-day and
+50-reviewed-item gate, approval, activation, and rollback. Source cadence changes likewise remain
+proposals until approved; respect human locks.
 
 ## Final handoff
 
-Return only the information needed to act:
-
-- project and briefing name;
-- data mode: fixture or live;
-- output path;
-- due sources and receipt count;
-- item count;
-- failures or missing sources;
-- schedule status;
-- next safe action.
+Return only what is needed to act: briefing name, data mode, run outcome, output paths, receipt and
+failure scope, schedule state, and the next safe command. Never claim a capability completed when its
+JSON result is missing or failed.

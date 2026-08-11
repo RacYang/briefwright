@@ -1,14 +1,22 @@
 {
   "name": "briefwright",
-  "version": "0.1.0-alpha.1",
+  "version": "0.2.0",
   "description": "Auditable, human-in-the-loop intelligence briefings from sources to knowledge.",
   "type": "module",
+  "types": "./dist/index.d.ts",
   "bin": {
     "briefwright": "./dist/cli.js"
+  },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./connector-sdk": { "types": "./dist/connector-sdk.d.ts", "import": "./dist/connector-sdk.js" }
   },
   "files": [
     "dist",
     "presets",
+    "policies",
+    "prompts",
+    "providers",
     "schemas",
     "templates",
     "skill",
@@ -23,10 +31,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "package:smoke": "node scripts/package-smoke.mjs"
   },
   "engines": {
-    "node": ">=24.11"
+    "node": ">=22.13"
   },
   "packageManager": "pnpm@11.16.0",
   "license": "Apache-2.0",

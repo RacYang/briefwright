@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { EffectiveConfig } from "../config/types.js";
 import { configDigest } from "../config/load.js";
-import { createHttpClient } from "../connectors/http.js";
+import { allowedHostsForSource, createHttpClient } from "../connectors/http.js";
 import { connectorFor } from "../connectors/registry.js";
 import type { CaptureEnvelope, ConnectorContext } from "../connectors/types.js";
 import type { BriefingItem, Receipt, RunResult } from "./types.js";
@@ -36,11 +36,7 @@ function relevance(capture: CaptureEnvelope, tokens: string[]): number {
 }
 
 function allowedHosts(config: EffectiveConfig): string[] {
-  return config.preset.sources.map((source) =>
-    source.connector.type === "github-releases"
-      ? "api.github.com"
-      : new URL(source.connector.config.url).hostname,
-  );
+  return config.preset.sources.flatMap(allowedHostsForSource);
 }
 
 function errorDetail(error: unknown): string {

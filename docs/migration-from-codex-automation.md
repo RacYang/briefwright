@@ -49,6 +49,11 @@ the production Base or vault.
 
 ## 4. Export and replace the task
 
+Use a released package installed in a versioned local runtime directory for production. Do not
+export from a mutable source checkout: `schedule codex` reports `runtime.immutable: false` when it
+detects that boundary. Keeping the executable and packaged protocol under the same versioned prefix
+lets development continue without changing the active task digest.
+
 ```bash
 briefwright --json schedule codex --config /path/to/briefing.yaml
 ```

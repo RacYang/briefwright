@@ -31,6 +31,7 @@ describe("scheduler definitions", () => {
       configDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       cliDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       contractDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      runtime: { immutable: false, warning: expect.stringContaining("versioned runtime directory") },
     });
     expect(definition.prompt).toContain(`cli: ${definition.cliPath}`);
     expect(definition.prompt).toContain("manifest 有来源");

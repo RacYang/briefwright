@@ -5,6 +5,7 @@ import * as p from "@clack/prompts";
 import { stringify } from "yaml";
 
 import type { BriefingIntent } from "../config/types.js";
+import { detectedProviderId } from "../providers/detect.js";
 
 async function exists(filePath: string): Promise<boolean> {
   try {
@@ -74,7 +75,7 @@ export async function initializeProject(options: InitOptions): Promise<string> {
     schedule: options.schedule ?? "manual",
     output: "markdown",
     outputDirectory: "briefs",
-    model: options.model ?? detectedModel(),
+    model: options.model ?? detectedProviderId(),
     processStore: options.processStore ?? "auto",
     documentStore: options.documentStore ?? "auto",
   };
@@ -82,8 +83,4 @@ export async function initializeProject(options: InitOptions): Promise<string> {
   await mkdir(root, { recursive: true });
   await writeFile(configPath, stringify(intent), { encoding: "utf8", flag: "wx" });
   return configPath;
-}
-
-function detectedModel(): string {
-  return "ollama";
 }

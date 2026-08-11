@@ -12,7 +12,7 @@ Please report suspected vulnerabilities privately through GitHub Security Adviso
 - Source connectors are read-only.
 - Default demo and fixture preview require no credential.
 - Output and state paths are bounded to a project root; symlinked components are rejected before writes.
-- Formal Qwen runs resolve a typed secret reference from the process environment, an ignored
+- Formal API-provider runs resolve a typed secret reference from the process environment, an ignored
   `.env.local`, or an explicitly configured bounded file. Values are excluded from configuration,
   hashes, snapshots, diagnostics, and errors.
 - Redirects are rejected by the built-in HTTP client.
@@ -22,15 +22,19 @@ Please report suspected vulnerabilities privately through GitHub Security Adviso
   claim-support check before deterministic selection.
 - Native schedules and knowledge writes require explicit command confirmation. Knowledge commits
   are bound to the target hash observed during proposal preview.
+- Conversational Skill installation requires `--yes`, rejects symlink destinations, refuses to
+  overwrite an unmanaged Skill, and refuses to update managed files after local modification. Its
+  receipt contains only version and content hashes; it stores no credential or project data.
 
 On systems using a transparent proxy with the RFC 2544 benchmarking range, addresses in `198.18.0.0/15` are accepted only while connecting to an exact host declared by the effective, validated source configuration. Literal benchmark addresses remain rejected.
 
 ## Supported provider endpoints
 
-Qwen credentials are sent only to an allowlist of Alibaba Model Studio pay-as-you-go shared,
-workspace-specific, or trial OpenAI-compatible HTTPS hosts. Coding Plan and Token Plan endpoints are
-rejected because they are intended for interactive coding tools, not recurring backend jobs. Expert
-configuration cannot redirect an authorization header to an arbitrary host or path.
+Each packaged provider binds credentials to its declared HTTPS host and protocol. Qwen credentials
+are sent only to an allowlist of Alibaba Model Studio pay-as-you-go shared, workspace-specific, or
+trial OpenAI-compatible hosts. Coding Plan and Token Plan endpoints are rejected because they are
+intended for interactive coding tools, not recurring backend jobs. Expert configuration cannot
+redirect an authorization header to an arbitrary host or path.
 
 ## Residual boundaries
 

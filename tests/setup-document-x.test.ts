@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-import { setupProject } from "../src/commands/setup.js";
+import { normalizeLarkBaseReference, setupProject } from "../src/commands/setup.js";
 import { initializeProject } from "../src/commands/init.js";
 import { loadEffectiveConfig, STANDARD_LARK_TABLES } from "../src/config/load.js";
 import { runFormalProject } from "../src/core/run.js";
@@ -19,6 +19,15 @@ function sourceResponse(url: string): Response {
 }
 
 describe("guided setup, documents, and X", () => {
+  it("accepts a direct official Base link and rejects lookalike or Wiki links", () => {
+    expect(normalizeLarkBaseReference("https://team.feishu.cn/base/bascnExample123?table=tbl1")).toBe("bascnExample123");
+    expect(normalizeLarkBaseReference("https://example.larksuite.com/base/AppToken_123")).toBe("AppToken_123");
+    expect(normalizeLarkBaseReference("bascnDirect123")).toBe("bascnDirect123");
+    expect(() => normalizeLarkBaseReference("https://feishu.cn.evil.example/base/bascnExample123")).toThrow("official");
+    expect(() => normalizeLarkBaseReference("http://team.feishu.cn/base/bascnExample123")).toThrow("HTTPS");
+    expect(() => normalizeLarkBaseReference("https://team.feishu.cn/wiki/wikcnExample123")).toThrow("Wiki link");
+  });
+
   it("writes an ordinary vendor-neutral setup without enabling anything", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-setup-"));
     const result = await setupProject({ directory: root, yes: true, name: "Signals", interests: ["agents"], model: "anthropic", processStore: "sqlite", documentStore: "local", schedule: "manual" });

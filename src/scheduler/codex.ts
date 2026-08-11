@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -11,10 +12,24 @@ function rrule(schedule: EffectiveConfig["schedule"]): string {
   throw new Error("Schedule is manual. Choose a recurring schedule before exporting a Codex automation.");
 }
 
+function enclosingGitCheckout(filePath: string): string | undefined {
+  let current = path.dirname(path.resolve(filePath));
+  for (;;) {
+    if (existsSync(path.join(current, ".git"))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
 export async function codexAutomationDefinition(config: EffectiveConfig, configPath: string) {
   const absolute = path.resolve(configPath); const fileDigest = createHash("sha256").update(await readFile(absolute)).digest("hex");
   const contractPath = packagedProtocolPath(); const contractDigest = createHash("sha256").update(await readFile(contractPath)).digest("hex");
   const cliPath = path.resolve(process.argv[1]!); const cliDigest = createHash("sha256").update(await readFile(cliPath)).digest("hex");
+  const checkoutRoot = enclosingGitCheckout(cliPath);
+  const runtime = checkoutRoot
+    ? { immutable: false, sourceCheckout: checkoutRoot, warning: "The exported CLI is inside a mutable Git checkout. Install a released package in a versioned runtime directory and export again before production scheduling." }
+    : { immutable: true };
   const browserCapture = config.controlPlane.lark?.xCapture === "codex-browser";
   const sourceValidator = config.sourceContract
     ? path.join(config.documents.root, "Inbox/AI Intelligence/Tools/validate-rule-contract.mjs")
@@ -45,6 +60,6 @@ export async function codexAutomationDefinition(config: EffectiveConfig, configP
     ...(sourceValidator ? ["8. 后置再次运行 NODE VALIDATOR。"] : []),
     "只返回有界 completionReport、产物路径、失败 Source ID、Rule ID 及存储校验；不返回原文、完整响应、secret 或 worker 日志。空 Daily/Review 合法。",
   ].join("\n");
-  return { kind: "cron", name: config.name, status: "ACTIVE", rrule: rrule(config.schedule), executionEnvironment: "local", cwd: config.projectRoot, independentTask: true, notificationPolicy: "failed_runs_only", prompt,
+  return { kind: "cron", name: config.name, status: "ACTIVE", rrule: rrule(config.schedule), executionEnvironment: "local", cwd: config.projectRoot, independentTask: true, notificationPolicy: "failed_runs_only", prompt, runtime,
     configDigest: fileDigest, cliPath, cliDigest, contractPath, contractDigest, ...(config.sourceContract ? { sourceContractPath: config.sourceContract.path, sourceContractDigest: config.sourceContract.sha256 } : {}) };
 }

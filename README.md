@@ -13,43 +13,61 @@ It is vendor-neutral:
 | Documents | Obsidian Markdown vault | Normal local folder | Explicit local-folder fallback |
 | Scheduling | Codex independent-task automation or native scheduler | launchd, cron, Windows Task Scheduler | Manual until enabled |
 
-## Start without reading configuration files
+## Start here
 
-Requirements: Node.js 22.13 or newer. Download `briefwright-2.0.1.tgz` from the GitHub Release and install it, or build from source:
+Briefwright requires Node.js 22.13 or newer. The npm short-name release is intentionally deferred to
+the next distribution version; `briefwright` is not yet published in the npm registry. For the
+current v2.0.1 release, download the checksum-pinned tarball from
+[GitHub Releases](https://github.com/RacYang/briefwright/releases/latest) and install the local file:
 
 ```bash
 npm install -g ./briefwright-2.0.1.tgz
 ```
 
-From a source checkout:
+Do not use `npm install -g briefwright` until the registry release is announced. The next release is
+intended to make that short command the primary path while retaining the tarball as an offline
+fallback.
+
+### Recommended: talk to the Skill
+
+The managed installer below is available from the current source tree and will ship in the next
+product release. The published v2.0.1 tarball already contains `skill/briefwright`, but does not yet
+include this installer command.
+
+Install the bundled conversational Skill once:
+
+```bash
+briefwright skill install --yes
+```
+
+Restart Codex and say:
+
+> Create my first Briefwright briefing. Watch AI agents every day, recommend the storage choices, and explain each decision in plain language.
+
+The Skill checks the installation, asks one small question at a time, lets you choose any supported model, connects Feishu/SQL and Obsidian/a local folder, creates a safe preview, explains failures, and asks before any schedule or remote write. You do not maintain YAML or memorize commands. The CLI stays underneath as the auditable execution engine; the Skill owns no parallel schema or state.
+
+What happens next:
+
+1. An offline fixture preview confirms installation and Markdown rendering. It does **not** use AI or claim that live sources work.
+2. A local health check validates configuration, paths, and SQLite.
+3. A live preview checks real sources without installing a schedule.
+4. An online health check verifies the selected model and external stores.
+5. A formal run creates Daily, Review, receipts, events, and the improvement evidence trail.
+6. Scheduling is offered only after the live proof passes and you explicitly approve it.
+
+### Alternative: use the terminal wizard
+
+If you prefer a terminal, create an empty folder and run `briefwright setup`. The local wizard asks for the briefing topic, model, process-data store, document destination, and schedule intent, then shows the plan before writing anything. It does not require YAML knowledge and never installs a schedule during setup.
+
+For maintainers building from source:
 
 ```bash
 pnpm install
 pnpm build
 npm link
-
-mkdir my-briefing && cd my-briefing
-briefwright setup
 ```
 
-`setup` asks five things: briefing topic, model, process store, document destination, and schedule. It writes `briefing.yaml`; you do not need to write YAML yourself.
-
-In Codex, install the packaged `skill/briefwright` Skill and ask in ordinary language—for example, “Create a daily AI briefing with Feishu for process data and Obsidian for documents.” The Skill operates the same CLI on your behalf. Users do not need to memorize commands, and the Skill owns no second schema, rule set, or state store. The CLI is the auditable execution layer, not an onboarding prerequisite.
-
-Then use the safe progression:
-
-```bash
-briefwright preview                 # offline fixture; proves rendering only
-briefwright doctor                  # local configuration, paths, and database
-briefwright preview --live          # real source collection; no schedule installed
-briefwright doctor --online         # selected model + store + source checks
-briefwright run                     # formal AI briefing
-briefwright open
-```
-
-`preview` is intentionally offline and does not use AI. It proves onboarding and document rendering. `run` is the real AI workflow and requires the selected model to be available.
-
-Nothing is scheduled by setup. A schedule requires a recent untampered live preview, a passing online doctor, and explicit confirmation.
+The offline demo needs no account or API key because it uses bundled fixture data. A formal briefing does use AI and requires the model you selected. A schedule requires a recent untampered live preview, a passing online doctor, and explicit confirmation.
 
 ## Choose any supported model
 
@@ -69,6 +87,11 @@ Provider presets use official APIs and can be overridden by a typed custom provi
 ## Feishu Base with `lark-cli`
 
 Feishu is the recommended collaborative process-data store, not the only store. Briefwright delegates Feishu identity and authorization to the installed `lark-cli`; it does not embed another OAuth client.
+
+In conversational mode, say “Use this Feishu Base for process data” and provide its link. The Skill
+checks whether `lark-cli` is installed and signed in, extracts only the Base identifier it needs,
+explains any missing login or permission, and asks before creating tables or synchronizing records.
+It never asks an ordinary user for table IDs. The commands below are the operator equivalent:
 
 ```bash
 lark-cli whoami
@@ -130,6 +153,11 @@ Current source types include RSS, GitHub Releases, bounded webpages, the officia
 
 Intermediate data has a purpose. Briefwright accepts include, skip, review, compare, classification correction, score correction, source correction, process feedback, usage, and knowledge-worthiness signals.
 
+An ordinary user can simply say “this item was useful”, “this source is repeatedly wrong”, or “show
+me the improvement proposals”. The Skill records only that feedback, explains the evidence and
+guardrails behind each proposal, and asks again before approval or activation. The commands below
+are for operators and automation:
+
 ```bash
 briefwright feedback add AI-... --type used --note "Changed a decision"
 briefwright improve diagnose --window 30
@@ -145,6 +173,10 @@ Formal runs invoke the diagnosis evaluator at most once every seven days over a 
 
 ## Scheduling like the production workflow
 
+In conversational mode, ask “run this every weekday at 9”. The Skill first explains the exact
+schedule and required live checks; it cannot enable anything until the current configuration has a
+valid live preview, online doctor, and your explicit confirmation.
+
 Codex users can export an independent-task definition matching the existing automation boundary:
 
 ```bash
@@ -152,6 +184,10 @@ briefwright schedule codex
 ```
 
 It freezes the config file, current CLI, packaged execution protocol, and optional source-system contract digests. It conditionally prepares the current X browser manifest, runs online doctor, then performs the formal run through absolute executable paths. The configured Lark/SQL control plane and Obsidian/local document store remain authoritative, and only the bounded completion report is returned. It does not install anything.
+
+Production export should come from a released package in a versioned runtime directory, not a
+mutable Git checkout. The definition exposes that condition as `runtime.immutable` and warns before
+cutover; upgrades create a new runtime directory and require an explicit automation update.
 
 For an existing Codex automation, do not hand-copy sources or table mappings. Follow the read-only import, live preview, isolated shadow run, and digest-bound cutover in [Migrating an existing Codex automation](docs/migration-from-codex-automation.md).
 
@@ -168,6 +204,7 @@ briefwright schedule disable --yes
 
 | Command | Purpose |
 |---|---|
+| `skill install`, `skill status` | Managed conversational Skill installation and read-only integrity status |
 | `setup`, `init`, `demo` | Guided project, minimal project, offline demonstration |
 | `preview [--live]`, `run [--retry-failed]` | Local-only preview and formal/recovery pipeline |
 | `doctor [--online] [--all-sources]`, `status`, `open`, `replay` | Due-source/full diagnostics, inspect, open, and verify |

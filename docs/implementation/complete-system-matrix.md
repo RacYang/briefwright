@@ -1,8 +1,8 @@
-# Briefwright 2.0 completion matrix
+# Briefwright completion matrix
 
 - Target: portable implementation of AI Intelligence Daily workflow 1.3
 - Reviewed: 2026-08-11
-- Release posture: implementation-complete release candidate; publishing is a separate external action
+- Release posture: v2.0.1 is published; conversational product-polish changes are unreleased
 
 A row is complete only when code, a user-facing path, failure behavior, and proportionate evidence
 exist. Design text or a fixture-only path is not enough. The final local suite ran every test,
@@ -11,7 +11,7 @@ PostgreSQL 17 and MySQL 8.4 as a merge gate.
 
 | Area | Implemented behavior | Evidence | Status |
 |---|---|---|---|
-| Ordinary-user start | Guided five-choice setup, review-before-write, offline fixture preview, visible next commands, no silent schedule | setup, demo, CLI E2E and package-install smoke tests | Complete |
+| Ordinary-user start | Natural-language Skill, one-question-at-a-time choices, guided five-choice terminal fallback, review-before-write, offline fixture preview, no silent schedule | Skill contract, setup, demo, CLI E2E and clean-package onboarding smoke tests | Complete |
 | Configuration | One small intent file, schema validation, explain/render/diff, explicit resource and DB migrations, typed secret references | config, migration, redaction and unknown-field tests | Complete |
 | Provider neutrality | OpenAI, Anthropic, Gemini, Qwen, Ollama, custom OpenAI-compatible endpoints, and runtime protocol registration | provider registry/contract tests; non-retryable 4xx test | Complete |
 | Process-store fallback | Omitted/auto store resolves visibly to local SQLite; configured remote failures do not silently fall back | config and doctor tests | Complete |
@@ -33,7 +33,7 @@ PostgreSQL 17 and MySQL 8.4 as a merge gate.
 | Policy experiment | Frozen 14-day/50-item sample, baseline/candidate replay, positive/negative/evidence guardrails, strict improvement, human approve/activate/rollback | harmful/unchanged rejection and full lifecycle test | Complete |
 | Cadence governance | Production weights including coverage gap, cold start, weekly hysteresis, adjacent steps, priority floors, human locks and explicit decision | clock-controlled cadence test | Complete |
 | Scheduling | Codex independent-task definition freezes config and contract digests; native schedule requires untampered live preview, online doctor and confirmation | scheduler golden/guard tests | Complete |
-| Skill | Conversational entry point calls the CLI as the only authority and preserves credential/write/approval boundaries | package inspection and package smoke | Complete |
+| Skill | Conversational entry point hides CLI/YAML, checks install/provider/Lark readiness, explains blocking versus partial failures, and preserves remote-write, schedule, knowledge and self-improvement approval boundaries | managed-install integrity tests, package inspection and clean-package smoke | Complete |
 | Open-source package | EN/ZH README, Apache-2.0/community/security files, schemas/protocol/presets/providers/docs/Skill in installable tarball | build, `npm pack` install/capabilities smoke, production audit with zero known vulnerabilities | Complete |
 
 ## Live production-parity readback
@@ -70,11 +70,15 @@ experiment, schedule, schema change, or knowledge write was activated.
 
 ## Honest remaining external gates
 
-- The final local verification passed all 75 tests with no skips, including real isolated
-  PostgreSQL and MySQL instances. The repository CI still provisions PostgreSQL 17 and MySQL 8.4
-  and remains the required cross-platform merge gate once the branch is published.
+- The current product-polish checkout passed 89 local tests. Two PostgreSQL/MySQL integration tests
+  were skipped because those services were not started in this verification. Published v2.0.1 CI
+  independently passed PostgreSQL 17 and MySQL 8.4, but the unreleased changes still require their
+  own cross-platform CI before a later release.
 - No live model call was repeated during final review. Provider request contracts were tested with
   deterministic HTTP fixtures; every installation must pass its own `doctor --online` for the
   selected model, region, quota and credential.
-- No Base record, external database, schedule, Git tag, release, npm package, or GitHub branch was
-  written or published during this review. Those are separate, explicit external operations.
+- GitHub v2.0.1 is published and its cross-platform CI plus PostgreSQL/MySQL integration jobs passed.
+  The product-polish changes described above remain a later release candidate until separately
+  committed, tagged, and published.
+- The npm short-name distribution and Homebrew packaging are deliberately deferred to a later
+  version. Neither should be presented as currently available.

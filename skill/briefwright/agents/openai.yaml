@@ -1,4 +1,4 @@
 interface:
   display_name: "Briefwright"
-  short_description: "Build auditable AI intelligence briefings"
-  default_prompt: "Use $briefwright to demo, configure, preview, run, diagnose, schedule, replay, improve, or safely integrate a Briefwright intelligence briefing. Keep ordinary setup to briefing.yaml, use CLI JSON as the source of truth, protect credentials, and require explicit confirmation for native schedules, policy activation, cadence changes, and knowledge writes."
+  short_description: "Build auditable briefings in ordinary language"
+  default_prompt: "Use $briefwright as my conversational briefing assistant. Detect or offer to install Briefwright, ask one simple question at a time, let me choose any supported model, recommend Feishu plus Obsidian while keeping SQLite and a local folder as clear fallbacks, and hide CLI and YAML unless I ask. Start with a safe preview, explain readiness and failures plainly, and require explicit confirmation before schedules, remote writes, policy or cadence changes, and knowledge commits."

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- make the conversational Skill the ordinary-user product surface, with one-question-at-a-time
+  onboarding, provider-neutral choices, Feishu/SQL and Obsidian/local fallbacks, failure explanation,
+  and explicit governance approvals;
+- add a confirmed, content-hash-managed Codex Skill installer that refuses symlink, unmanaged, or
+  locally modified destinations;
+- accept direct official Feishu Base links during setup, choose a detected Codex installation ahead
+  of an unavailable Ollama default, and warn when a Codex automation is exported from a mutable Git
+  checkout instead of a versioned runtime;
+- extend clean-package smoke testing through setup, offline preview, local doctor, status, and Skill
+  integrity, while keeping npm short-name and Homebrew distribution deferred to a later release.
+
 ## 2.0.1 - 2026-08-11
 
 - normalize managed Obsidian Wiki-link targets to forward slashes on Windows;

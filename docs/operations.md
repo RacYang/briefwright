@@ -1,5 +1,17 @@
 # Operations
 
+## Conversational entry point
+
+`briefwright skill install --yes` installs the packaged Codex Skill under the current user's Codex
+skills directory. `skill status` is read-only. Installation and updates are content-hash managed:
+an existing unrelated Skill or locally edited managed file is never overwritten. Restart Codex
+after a successful install. The Skill translates ordinary-language choices into the same JSON CLI
+surface used by operators; it does not own configuration, policy, or state.
+
+The registry availability check and CLI installation are separate. Until an npm registry release is
+announced, use the checksum-pinned GitHub release tarball or a source checkout; do not interpret the
+presence of an npm package name in documentation as proof that it has been published.
+
 ## Run outcomes
 
 - `success`: every due source has a successful receipt and model processing completed.
@@ -59,3 +71,10 @@ the exact built CLI, the packaged protocol, and an optional imported source cont
 capture is configured, it first emits the currently due manifest and validates the resulting
 read-only bundle. A zero-source manifest requires no bundle. Any digest drift stops the task for
 review instead of silently running different code or rules.
+
+Do not point a production automation at a mutable source checkout. The export reports
+`runtime.immutable: false` with a warning when the active CLI is enclosed by a Git checkout. Install
+the released package into a versioned local runtime directory, invoke that exact CLI to export the
+definition, and keep both the CLI and packaged protocol under that immutable prefix. Upgrades use a
+new version directory and an explicit automation update; development builds cannot then break the
+active task's digest.

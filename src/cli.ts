@@ -26,6 +26,7 @@ import { runFormalProject } from "./core/run.js";
 import { ConfigurationError } from "./config/load.js";
 import { provisionSqlProject } from "./commands/sql.js";
 import { externalCaptureManifest, validateExternalCaptureFile } from "./commands/capture.js";
+import { installSkill, skillStatus } from "./commands/skill.js";
 
 const program = new Command();
 const VERSION = String((JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: unknown }).version);
@@ -60,7 +61,7 @@ program.command("setup")
   .option("--interest <topic...>", "topics to watch")
   .option("--model <provider>", "codex, openai, anthropic, gemini, qwen, ollama, or a packaged provider")
   .option("--process-store <driver>", "lark, postgres, mysql, or sqlite")
-  .option("--lark-base <token>", "Feishu Base app token used by lark-cli")
+  .option("--lark-base <link-or-token>", "Feishu Base link or app token used by lark-cli")
   .option("--connection-env <name>", "environment variable containing a PostgreSQL/MySQL connection URL")
   .option("--document-store <driver>", "obsidian or local")
   .option("--document-root <path>", "Obsidian vault root")
@@ -74,6 +75,27 @@ program.command("setup")
     if (isJsonOutput()) return writeJson({ ok: true, command: "setup", ...result });
     console.log(`Created ${result.configPath}`); console.log(`Model: ${result.choices.model}`); console.log(`Process data: ${result.choices.processStore}`); console.log(`Documents: ${result.choices.documentStore}`);
     console.log("\nNext:"); for (const next of result.next) console.log(`  ${next}`);
+  });
+
+const skillCommand = program.command("skill").description("Install or inspect the bundled conversational Codex Skill.");
+skillCommand.command("install")
+  .description("Install the bundled Skill into the local Codex skills directory.")
+  .option("--destination <path>", "advanced: alternate skills directory")
+  .option("-y, --yes", "confirm the local write", false)
+  .action(async ({ destination, yes }: { destination?: string; yes: boolean }) => {
+    const result = await installSkill({ ...(destination ? { destination } : {}), yes, version: VERSION });
+    if (isJsonOutput()) return writeJson({ ok: true, command: "skill install", ...result });
+    console.log(`${result.updated ? "Updated" : "Installed"} Briefwright Skill: ${result.destination}`);
+    console.log("Restart Codex, then ask: Create my first Briefwright briefing.");
+  });
+skillCommand.command("status")
+  .description("Inspect the local Codex Skill installation without changing it.")
+  .option("--destination <path>", "advanced: alternate skills directory")
+  .action(async ({ destination }: { destination?: string }) => {
+    const result = await skillStatus(destination);
+    if (isJsonOutput()) return writeJson({ ok: true, command: "skill status", ...result });
+    console.log(result.installed ? `Briefwright Skill: ${result.managed && result.intact ? "installed" : "needs attention"}` : "Briefwright Skill: not installed");
+    console.log(result.destination);
   });
 
 program
@@ -570,7 +592,7 @@ program
   .action(() => {
     const capabilities = {
       version: VERSION,
-      commands: ["demo", "setup", "init", "preview", "run", "capture", "replay", "status", "open", "doctor", "import", "lark", "sql", "sync", "config", "db", "schedule", "enable", "feedback", "improve", "experiment", "cadence", "knowledge", "capabilities"],
+      commands: ["demo", "setup", "skill", "init", "preview", "run", "capture", "replay", "status", "open", "doctor", "import", "lark", "sql", "sync", "config", "db", "schedule", "enable", "feedback", "improve", "experiment", "cadence", "knowledge", "capabilities"],
       connectors: ["rss", "github-releases", "webpage", "x-api", "codex-browser", "extension-sdk"],
       providers: ["codex", "openai", "anthropic", "gemini", "qwen", "ollama", "custom-openai-compatible", "custom-protocol", "fixture"],
       processStores: ["lark-cli", "postgres", "mysql", "sqlite-fallback"],

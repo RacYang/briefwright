@@ -1,6 +1,7 @@
 import * as p from "@clack/prompts";
 
 import type { BriefingIntent } from "../config/types.js";
+import { detectedProviderId } from "../providers/detect.js";
 import { initializeProject } from "./init.js";
 
 export interface SetupOptions {
@@ -17,17 +18,34 @@ export interface SetupOptions {
   schedule?: BriefingIntent["schedule"];
 }
 
-function detectedModel(): string {
-  if (process.env.OPENAI_API_KEY) return "openai";
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
-  if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) return "gemini";
-  if (process.env.DASHSCOPE_API_KEY) return "qwen";
-  return "ollama";
+export function normalizeLarkBaseReference(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("Feishu Base link or app token is empty");
+  if (!/^https?:\/\//i.test(trimmed)) {
+    if (!/^[A-Za-z0-9_-]{6,}$/.test(trimmed)) throw new Error("Feishu Base app token is malformed");
+    return trimmed;
+  }
+  let url: URL;
+  try { url = new URL(trimmed); } catch { throw new Error("Feishu Base link is not a valid URL"); }
+  if (url.protocol !== "https:") throw new Error("Feishu Base links must use HTTPS");
+  const host = url.hostname.toLowerCase();
+  if (!(host === "feishu.cn" || host.endsWith(".feishu.cn") || host === "larksuite.com" || host.endsWith(".larksuite.com"))) {
+    throw new Error("Feishu Base links must use an official feishu.cn or larksuite.com host");
+  }
+  const segments = url.pathname.split("/").filter(Boolean);
+  const baseIndex = segments.indexOf("base");
+  if (baseIndex < 0 || !segments[baseIndex + 1]) {
+    if (segments.includes("wiki")) throw new Error("This is a Feishu Wiki link, not a direct Base link. Open the Base and copy its /base/... link.");
+    throw new Error("Could not find the Base app token in this link. Expected an official /base/<token> link.");
+  }
+  const token = decodeURIComponent(segments[baseIndex + 1]!);
+  if (!/^[A-Za-z0-9_-]{6,}$/.test(token)) throw new Error("The Base app token in this link is malformed");
+  return token;
 }
 
 export async function setupProject(options: SetupOptions): Promise<{ configPath: string; choices: Record<string, unknown>; next: string[] }> {
   let name = options.name ?? "My AI briefing"; let interests = options.interests ?? ["AI agents", "model releases", "AI safety"];
-  let model = options.model ?? detectedModel(); let processStore = options.processStore ?? (process.env.BRIEFWRIGHT_LARK_BASE_TOKEN ? "lark" : "sqlite");
+  let model = options.model ?? detectedProviderId(); let processStore = options.processStore ?? (process.env.BRIEFWRIGHT_LARK_BASE_TOKEN ? "lark" : "sqlite");
   let documentStore = options.documentStore ?? "local"; let schedule = options.schedule ?? "manual";
   let larkBase = options.larkBase ?? process.env.BRIEFWRIGHT_LARK_BASE_TOKEN; let connectionEnv = options.connectionEnv; let documentRoot = options.documentRoot;
   if (!options.yes && process.stdin.isTTY) {
@@ -47,14 +65,14 @@ export async function setupProject(options: SetupOptions): Promise<{ configPath:
       documentStore: () => p.select({ message: "Where should Markdown briefings live?", initialValue: documentStore, options: [
         { value: "obsidian", label: "Obsidian vault (recommended)" }, { value: "local", label: "Local project folder" },
       ] }),
-      schedule: () => p.select({ message: "Schedule now? You can keep this manual until preview succeeds.", initialValue: schedule, options: [
-        { value: "manual", label: "Manual for now" }, { value: "daily-at-10", label: "Daily at 10:00" }, { value: "weekdays-at-09", label: "Weekdays at 09:00" },
+      schedule: () => p.select({ message: "How often should it run after validation? Nothing is enabled yet.", initialValue: schedule, options: [
+        { value: "manual", label: "Manual for now" }, { value: "daily-at-10", label: "Plan daily at 10:00" }, { value: "weekdays-at-09", label: "Plan weekdays at 09:00" },
       ] }),
     }, { onCancel: () => { p.cancel("Setup cancelled; no files were changed."); throw new Error("Setup cancelled; no files were changed"); } });
     name = String(answers.name).trim(); interests = String(answers.interests).split(",").map((item) => item.trim()).filter(Boolean);
     model = String(answers.model); processStore = answers.processStore as typeof processStore; documentStore = answers.documentStore as typeof documentStore; schedule = answers.schedule as typeof schedule;
     if (processStore === "lark" && !larkBase) {
-      const value = await p.text({ message: "Feishu Base app token (lark-cli supplies your identity):", placeholder: "bascn... or Base app token" });
+      const value = await p.text({ message: "Paste the Feishu Base link or app token (lark-cli supplies your identity):", placeholder: "https://team.feishu.cn/base/... or bascn..." });
       if (p.isCancel(value)) throw new Error("Setup cancelled; no files were changed"); larkBase = value.trim();
     }
     if ((processStore === "postgres" || processStore === "mysql") && !connectionEnv) {
@@ -74,10 +92,10 @@ export async function setupProject(options: SetupOptions): Promise<{ configPath:
     const confirmed = await p.confirm({ message: "Write briefing.yaml with this plan?", initialValue: true });
     if (p.isCancel(confirmed) || !confirmed) { p.cancel("Setup cancelled; no files were changed."); throw new Error("Setup cancelled; no files were changed"); }
   }
-  if (processStore === "lark" && !larkBase) throw new Error("Lark setup needs --lark-base <Base token or app token>. Briefwright never guesses a Base.");
+  if (processStore === "lark" && !larkBase) throw new Error("Lark setup needs --lark-base <Base link or app token>. Briefwright never guesses a Base.");
   if ((processStore === "postgres" || processStore === "mysql") && !connectionEnv) throw new Error(`${processStore} setup needs --connection-env <ENV_NAME>`);
   if (documentStore === "obsidian" && !documentRoot) throw new Error("Obsidian setup needs --document-root <vault path>");
-  const processIntent: BriefingIntent["processStore"] = processStore === "lark" ? { driver: "lark", baseToken: larkBase!, identity: "user" }
+  const processIntent: BriefingIntent["processStore"] = processStore === "lark" ? { driver: "lark", baseToken: normalizeLarkBaseReference(larkBase!), identity: "user" }
     : processStore === "postgres" || processStore === "mysql" ? { driver: processStore, connection: { provider: "env", key: connectionEnv! } } : "sqlite";
   const documentIntent: BriefingIntent["documentStore"] = documentStore === "obsidian" ? { driver: "obsidian", root: documentRoot!, briefingDirectory: "Inbox/AI Intelligence" } : "local";
   const configPath = await initializeProject({ directory: options.directory, yes: true, name, interests, model, processStore: processIntent, documentStore: documentIntent, schedule });

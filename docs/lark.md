@@ -1,6 +1,6 @@
 # Feishu Base through Lark CLI
 
-Briefwright uses `lark-cli` as its only Feishu transport. Install and authenticate it first, then verify `lark-cli whoami`.
+Briefwright uses `lark-cli` as its only Feishu transport. Install and authenticate it first, then verify `lark-cli whoami`. Conversational setup accepts either the Base app token or a direct official `feishu.cn`/`larksuite.com` `/base/...` link. Wiki links are rejected because a Wiki node ID is not a Base app token; open the underlying Base and copy its direct link.
 
 ```yaml
 processStore:

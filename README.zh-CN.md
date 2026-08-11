@@ -13,43 +13,58 @@ Briefwright 把持续监控的来源转化为可审计的 Daily 简报、人工 
 | 文档 | Obsidian Markdown vault | 普通本地文件夹 | 明确降级为本地文件夹 |
 | 定时任务 | Codex 独立任务或系统原生调度 | launchd、cron、Windows 任务计划 | 默认手动，不会静默启用 |
 
-## 普通用户从这里开始
+## 从这里开始
 
-环境要求：Node.js 22.13 或更高版本。可以从 GitHub Release 下载 `briefwright-2.0.1.tgz` 后安装，也可以从源码构建：
+Briefwright 需要 Node.js 22.13 或更高版本。npm 短名发布已经明确延期到下一个分发版本，
+目前 npm registry 中还没有正式发布 `briefwright`。当前 v2.0.1 请从
+[GitHub Releases](https://github.com/RacYang/briefwright/releases/latest) 下载带校验和的压缩包，再安装本地文件：
 
 ```bash
 npm install -g ./briefwright-2.0.1.tgz
 ```
 
-源码方式：
+在 registry 发布公告前不要执行 `npm install -g briefwright`。下一版本会把这个短命令作为主入口，
+并保留 GitHub 压缩包作为离线备用方式。
+
+### 推荐方式：直接和 Skill 对话
+
+下面的受管安装器已在当前源码中完成，会随下一个产品版本发布。已经发布的 v2.0.1
+压缩包包含 `skill/briefwright`，但还没有这个安装命令。
+
+只需安装一次随包发布的对话式 Skill：
+
+```bash
+briefwright skill install --yes
+```
+
+重启 Codex，然后直接说：
+
+> 帮我创建第一个 Briefwright 简报。每天关注 AI Agent，给我推荐存储方式，并用普通话解释每一步。
+
+Skill 会检查安装状态，一次只问一个必要问题，让你自由选择模型，连接飞书/SQL 与 Obsidian/本地文件夹，先生成安全预览，解释失败，并在定时任务或远程写入前征求确认。普通用户不用维护 YAML，也不用记命令。CLI 只在底层承担可审计执行，不会再复制一套 schema、规则或状态。
+
+接下来实际会发生：
+
+1. 离线固定样例验证安装和 Markdown 渲染；它**不会调用 AI**，也不代表真实来源已经可用。
+2. 本地健康检查验证配置、路径与 SQLite。
+3. live preview 检查真实来源，但不会安装定时任务。
+4. 在线健康检查验证用户所选模型与外部存储。
+5. 正式运行生成 Daily、Review、回执、事件和自我迭代所需证据。
+6. 只有上述真实验证通过并获得明确同意后，才会提供定时运行。
+
+### 另一种方式：使用终端引导
+
+如果你更喜欢终端，在一个空文件夹里运行 `briefwright setup`。本地引导只询问简报主题、模型、过程数据存储、文档位置和周期意图，写入前会展示计划；不要求理解 YAML，也不会在 setup 阶段安装定时任务。
+
+维护者从源码构建：
 
 ```bash
 pnpm install
 pnpm build
 npm link
-
-mkdir my-briefing && cd my-briefing
-briefwright setup
 ```
 
-`setup` 只问五件事：简报主题、使用哪个模型、过程数据放哪里、文档放哪里、是否设置周期。它会替你生成 `briefing.yaml`，普通用户不需要先学 YAML 或内部 schema。
-
-如果你在 Codex 中使用本项目，也可以把 `skill/briefwright` 安装为 Skill，直接说“帮我创建一个每天的 AI 简报，过程数据放飞书，文档放 Obsidian”。Skill 会代你调用同一套 CLI；你不需要记命令，也不会产生第二套规则或状态。CLI 是可审计执行层，不是对普通用户的知识门槛。
-
-随后按安全顺序操作：
-
-```bash
-briefwright preview                 # 离线样例，只证明渲染链路
-briefwright doctor                  # 本地配置、路径和数据库检查
-briefwright preview --live          # 真实采集来源，但不安装定时任务
-briefwright doctor --online         # 模型、过程存储、来源在线检查
-briefwright run                     # 真正调用 AI 的正式简报
-briefwright open
-```
-
-`preview` 是纯离线固定样例，不会调用 AI；它只用于让用户在两分钟内看见产物并确认输出位置。`run` 才是真实 AI 流水线，需要用户所选 Provider 可用。
-
-setup 不会安装定时任务。必须先有近期未被篡改的 live preview、在线 doctor 通过，并由用户明确确认，才能启用周期运行。
+离线演示无需账户或 API Key，因为它使用项目内置固定样例。正式简报会真实使用 AI，并要求你选择的模型可用。定时任务仍要求近期未被篡改的 live preview、通过在线 doctor 和用户明确确认。
 
 ## 模型由用户决定
 
@@ -69,6 +84,10 @@ Briefwright 不默认“只能用千问”。setup 会检测常见环境变量�
 ## 飞书 Base：默认推荐，但不是强依赖
 
 飞书适合作为团队协作的过程数据控制面。Briefwright 只通过 `lark-cli` 使用飞书身份与授权，不再嵌入另一套 OAuth 或飞书 SDK。
+
+在对话模式里只要说“过程数据使用这个飞书 Base”，再提供 Base 链接即可。Skill 会检查
+`lark-cli` 是否安装并登录，只提取需要的 Base 标识，解释缺失的登录或权限，并在建表或同步记录前
+再次确认；不会要求普通用户寻找 table ID。下面的命令只是给运维人员看的等价操作：
 
 ```bash
 lark-cli whoami
@@ -130,6 +149,9 @@ flowchart LR
 
 中间数据会实际进入改进闭环。系统支持纳入、略过、复核、比较、分类纠正、评分纠正、来源纠正、流程反馈，以及 used、knowledge-worthy 等结果信号。
 
+普通用户只要说“这条有用”“这个来源经常不准”或“给我看看改进建议”。Skill 只记录用户真实表达的
+反馈，解释每个提案的证据与护栏，并在批准或激活前再次询问。下面的命令用于运维与自动化：
+
 ```bash
 briefwright feedback add AI-... --type used --note "改变了一个实现决策"
 briefwright improve diagnose --window 30
@@ -145,6 +167,9 @@ briefwright experiment rollback EXP-... --yes
 
 ## 同步现有定时任务边界
 
+在对话模式里可以直接说“工作日每天 9 点运行”。Skill 会先说明准确周期和必须通过的真实检查；
+只有当前配置完成 live preview、在线 doctor 并获得明确确认后，才允许启用。
+
 Codex 用户可以导出与现有体系一致的“独立任务”定义：
 
 ```bash
@@ -152,6 +177,9 @@ briefwright schedule codex
 ```
 
 定义会冻结配置文件、当前 CLI、随版本发布的唯一执行协议，以及可选的原系统合同四个 digest。任务先生成当次 X 浏览器清单（如适用），再执行在线 doctor，最后运行正式简报；使用绝对可执行路径，不要求任务环境预先配置 `briefwright` 命令。它会继续使用已配置的 Lark/SQL 控制面与 Obsidian/本地文档存储，并只返回有界 completion report。这个命令只导出，不会静默安装。
+
+生产导出应来自版本化目录中安装的正式包，不能直接指向持续变化的 Git 工作区。定义会通过
+`runtime.immutable` 暴露这一状态，并在切换前给出警告；升级时创建新的版本目录，再显式更新自动任务。
 
 已有 Codex 定时任务迁移时，不要手工复制 170 个来源或九张表。使用只读导入、live preview、shadow run 和 digest 绑定完成切换，步骤见[从现有 Codex 定时任务迁移](docs/migration-from-codex-automation.md)。
 
@@ -168,6 +196,7 @@ briefwright schedule disable --yes
 
 | 命令 | 用途 |
 |---|---|
+| `skill install`、`skill status` | 受管的对话式 Skill 安装与只读完整性检查 |
 | `setup`、`init`、`demo` | 引导式项目、最小项目、离线演示 |
 | `preview [--live]`、`run [--retry-failed]` | 只写本地预览、正式或恢复运行 |
 | `doctor [--online] [--all-sources]`、`status`、`open`、`replay` | 到期源/全量校验、检查、打开与重放 |

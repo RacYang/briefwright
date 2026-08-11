@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 - 2026-08-11
 
 - make the conversational Skill the ordinary-user product surface, with one-question-at-a-time
   onboarding, provider-neutral choices, Feishu/SQL and Obsidian/local fallbacks, failure explanation,

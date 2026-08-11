@@ -2,7 +2,7 @@
 
 - Target: portable implementation of AI Intelligence Daily workflow 1.3
 - Reviewed: 2026-08-11
-- Release posture: v2.0.1 is published; conversational product-polish changes are unreleased
+- Release posture: v2.1.0 release candidate; publication is verified through external CI and Release readback
 
 A row is complete only when code, a user-facing path, failure behavior, and proportionate evidence
 exist. Design text or a fixture-only path is not enough. The final local suite ran every test,
@@ -78,7 +78,6 @@ experiment, schedule, schema change, or knowledge write was activated.
   deterministic HTTP fixtures; every installation must pass its own `doctor --online` for the
   selected model, region, quota and credential.
 - GitHub v2.0.1 is published and its cross-platform CI plus PostgreSQL/MySQL integration jobs passed.
-  The product-polish changes described above remain a later release candidate until separately
-  committed, tagged, and published.
+  The v2.1.0 commit must pass its own cross-platform, package and SQL jobs before tagging.
 - The npm short-name distribution and Homebrew packaging are deliberately deferred to a later
   version. Neither should be presented as currently available.

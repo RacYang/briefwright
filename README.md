@@ -17,22 +17,18 @@ It is vendor-neutral:
 
 Briefwright requires Node.js 22.13 or newer. The npm short-name release is intentionally deferred to
 the next distribution version; `briefwright` is not yet published in the npm registry. For the
-current v2.0.1 release, download the checksum-pinned tarball from
+current v2.1.0 release, download the checksum-pinned tarball from
 [GitHub Releases](https://github.com/RacYang/briefwright/releases/latest) and install the local file:
 
 ```bash
-npm install -g ./briefwright-2.0.1.tgz
+npm install -g ./briefwright-2.1.0.tgz
 ```
 
-Do not use `npm install -g briefwright` until the registry release is announced. The next release is
-intended to make that short command the primary path while retaining the tarball as an offline
+Do not use `npm install -g briefwright` until the registry release is announced. A future registry
+release is intended to make that short command the primary path while retaining the tarball as an offline
 fallback.
 
 ### Recommended: talk to the Skill
-
-The managed installer below is available from the current source tree and will ship in the next
-product release. The published v2.0.1 tarball already contains `skill/briefwright`, but does not yet
-include this installer command.
 
 Install the bundled conversational Skill once:
 

@@ -16,20 +16,17 @@ Briefwright 把持续监控的来源转化为可审计的 Daily 简报、人工 
 ## 从这里开始
 
 Briefwright 需要 Node.js 22.13 或更高版本。npm 短名发布已经明确延期到下一个分发版本，
-目前 npm registry 中还没有正式发布 `briefwright`。当前 v2.0.1 请从
+目前 npm registry 中还没有正式发布 `briefwright`。当前 v2.1.0 请从
 [GitHub Releases](https://github.com/RacYang/briefwright/releases/latest) 下载带校验和的压缩包，再安装本地文件：
 
 ```bash
-npm install -g ./briefwright-2.0.1.tgz
+npm install -g ./briefwright-2.1.0.tgz
 ```
 
-在 registry 发布公告前不要执行 `npm install -g briefwright`。下一版本会把这个短命令作为主入口，
-并保留 GitHub 压缩包作为离线备用方式。
+在 registry 发布公告前不要执行 `npm install -g briefwright`。后续 registry 发布会把这个短命令作为主入口，
+同时保留 GitHub 压缩包作为离线备用方式。
 
 ### 推荐方式：直接和 Skill 对话
-
-下面的受管安装器已在当前源码中完成，会随下一个产品版本发布。已经发布的 v2.0.1
-压缩包包含 `skill/briefwright`，但还没有这个安装命令。
 
 只需安装一次随包发布的对话式 Skill：
 

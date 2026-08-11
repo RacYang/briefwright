@@ -2,7 +2,9 @@ const START = "<!-- briefwright:index:start -->";
 const END = "<!-- briefwright:index:end -->";
 
 export function updateBriefingIndex(existing: string | undefined, title: string, relativeArtifact: string, marker?: string): string {
-  const entry = marker ? `- [[${relativeArtifact.replace(/\.md$/, "")}|${relativeArtifact.replace(/\.md$/, "")}]]` : `- [${relativeArtifact.replace(/\.md$/, "")}](${relativeArtifact})`;
+  const normalized = relativeArtifact.split(/[/\\]+/).join("/");
+  const target = normalized.replace(/\.md$/, "");
+  const entry = marker ? `- [[${target}|${target}]]` : `- [${target}](${normalized})`;
   const startMarker = marker ? `<!-- ${marker}:start -->` : START; const endMarker = marker ? `<!-- ${marker}:end -->` : END;
   if (existing === undefined) return `# ${title}\n\n${startMarker}\n${entry}\n${endMarker}\n`;
   const start = existing.indexOf(startMarker);

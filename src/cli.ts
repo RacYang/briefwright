@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
+import { readFileSync } from "node:fs";
 
 import { Command } from "commander";
 
@@ -27,6 +28,7 @@ import { provisionSqlProject } from "./commands/sql.js";
 import { externalCaptureManifest, validateExternalCaptureFile } from "./commands/capture.js";
 
 const program = new Command();
+const VERSION = String((JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: unknown }).version);
 const jsonRequested = process.argv.includes("--json");
 
 function isJsonOutput(): boolean {
@@ -40,7 +42,7 @@ function writeJson(value: unknown): void {
 program
   .name("briefwright")
   .description("Source-linked, auditable intelligence briefings without the setup wall.")
-  .version("2.0.0")
+  .version(VERSION)
   .option("--json", "emit bounded machine-readable output", false);
 
 if (jsonRequested) program.exitOverride();
@@ -567,7 +569,7 @@ program
   .description("Describe the installed CLI surface and safety-relevant feature state.")
   .action(() => {
     const capabilities = {
-      version: "2.0.0",
+      version: VERSION,
       commands: ["demo", "setup", "init", "preview", "run", "capture", "replay", "status", "open", "doctor", "import", "lark", "sql", "sync", "config", "db", "schedule", "enable", "feedback", "improve", "experiment", "cadence", "knowledge", "capabilities"],
       connectors: ["rss", "github-releases", "webpage", "x-api", "codex-browser", "extension-sdk"],
       providers: ["codex", "openai", "anthropic", "gemini", "qwen", "ollama", "custom-openai-compatible", "custom-protocol", "fixture"],

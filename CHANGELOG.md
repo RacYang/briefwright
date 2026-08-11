@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.1 - 2026-08-11
+
+- normalize managed Obsidian Wiki-link targets to forward slashes on Windows;
+- keep the complete cross-platform suite bounded with an explicit 20-second test timeout.
+
 ## 2.0.0 - 2026-08-11
 
 - rebaseline completion against the production nine-entity AI-intelligence contract instead of the narrower historical local matrix;

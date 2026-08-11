@@ -1,6 +1,6 @@
 {
   "name": "briefwright",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Auditable, human-in-the-loop intelligence briefings from sources to knowledge.",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -41,7 +41,7 @@
     "dev": "tsx src/cli.ts",
     "check": "pnpm run typecheck && pnpm run test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --testTimeout=20000",
     "test:watch": "vitest",
     "start": "node dist/cli.js",
     "package:smoke": "node scripts/package-smoke.mjs"

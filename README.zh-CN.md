@@ -15,10 +15,10 @@ Briefwright 把持续监控的来源转化为可审计的 Daily 简报、人工 
 
 ## 普通用户从这里开始
 
-环境要求：Node.js 22.13 或更高版本。可以从 GitHub Release 下载 `briefwright-2.0.0.tgz` 后安装，也可以从源码构建：
+环境要求：Node.js 22.13 或更高版本。可以从 GitHub Release 下载 `briefwright-2.0.1.tgz` 后安装，也可以从源码构建：
 
 ```bash
-npm install -g ./briefwright-2.0.0.tgz
+npm install -g ./briefwright-2.0.1.tgz
 ```
 
 源码方式：

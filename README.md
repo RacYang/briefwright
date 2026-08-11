@@ -15,10 +15,10 @@ It is vendor-neutral:
 
 ## Start without reading configuration files
 
-Requirements: Node.js 22.13 or newer. Download `briefwright-2.0.0.tgz` from the GitHub Release and install it, or build from source:
+Requirements: Node.js 22.13 or newer. Download `briefwright-2.0.1.tgz` from the GitHub Release and install it, or build from source:
 
 ```bash
-npm install -g ./briefwright-2.0.0.tgz
+npm install -g ./briefwright-2.0.1.tgz
 ```
 
 From a source checkout:

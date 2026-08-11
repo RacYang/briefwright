@@ -18,11 +18,11 @@ describe("versioned migrations", () => {
     const v1 = "version: 1\nname: Old\ninterests: [AI agents]\n";
     await writeFile(configPath, v1, "utf8");
     const preview = await migrateConfiguration(configPath, false);
-    expect(preview).toMatchObject({ changed: true, fromVersion: 1, toVersion: 2, written: false });
+    expect(preview).toMatchObject({ changed: true, fromVersion: 1, toVersion: 3, written: false });
     expect(await readFile(configPath, "utf8")).toBe(v1);
     const written = await migrateConfiguration(configPath, true);
     expect(written.written).toBe(true);
-    expect(await readFile(configPath, "utf8")).toContain("version: 2");
+    expect(await readFile(configPath, "utf8")).toContain("version: 3");
     await expect(access(written.backupPath!)).resolves.toBeUndefined();
   });
 
@@ -37,7 +37,7 @@ describe("versioned migrations", () => {
     const result = migrateDatabase(database, { databasePath, write: true });
     database.close();
     expect(result.current).toBe(result.latest);
-    expect(result.applied).toEqual([2, 3, 4, 5, 6]);
+    expect(result.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     await expect(access(result.backupPath!)).resolves.toBeUndefined();
     const store = new SqliteStateStore(databasePath, root);
     store.close();
@@ -46,7 +46,7 @@ describe("versioned migrations", () => {
   it("previews a fresh database migration without creating state", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-db-preview-"));
     const configPath = await initializeProject({ directory: root, yes: true });
-    await expect(migrateProjectDatabase(configPath, false)).resolves.toMatchObject({ current: 0, latest: 6, applied: [] });
+    await expect(migrateProjectDatabase(configPath, false)).resolves.toMatchObject({ current: 0, latest: 11, applied: [] });
     await expect(access(path.join(root, ".briefwright"))).rejects.toThrow();
   });
 });

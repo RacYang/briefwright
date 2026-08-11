@@ -49,13 +49,13 @@ function proposalContent(item: ReturnType<SqliteStateStore["itemForKnowledge"]>)
 
 export async function proposeKnowledge(configPath: string, itemId: string, target: string, heading?: string) {
   const config = await loadEffectiveConfig(configPath);
-  const targetPath = resolveWithinRoot(config.projectRoot, target);
-  const relativeTarget = path.relative(config.projectRoot, targetPath);
+  const targetPath = resolveWithinRoot(config.documents.root, target);
+  const relativeTarget = path.relative(config.documents.root, targetPath);
   if (!/\.md$/i.test(targetPath)) throw new Error("Knowledge targets must be Markdown files ending in .md");
   if (relativeTarget === "briefing.yaml" || relativeTarget === ".briefwright" || relativeTarget.startsWith(`.briefwright${path.sep}`) || relativeTarget === "briefwright.d" || relativeTarget.startsWith(`briefwright.d${path.sep}`)) {
     throw new Error("Knowledge targets may not modify Briefwright configuration or internal state");
   }
-  await prepareSafeFilePath(config.projectRoot, targetPath);
+  await prepareSafeFilePath(config.documents.root, targetPath);
   const existing = await optionalFile(targetPath);
   const store = new SqliteStateStore(config.storage.path, config.projectRoot);
   try {
@@ -90,7 +90,7 @@ export async function commitKnowledge(configPath: string, proposalId: string) {
   try {
     const proposal = store.knowledgeProposal(proposalId);
     if (proposal.status !== "proposed") throw new Error(`Knowledge proposal ${proposalId} is ${proposal.status}`);
-    await prepareSafeFilePath(config.projectRoot, proposal.targetPath);
+    await prepareSafeFilePath(config.documents.root, proposal.targetPath);
     const existing = await optionalFile(proposal.targetPath);
     const currentHash = existing === undefined ? undefined : hash(existing);
     if (currentHash !== proposal.expectedTargetHash) throw new Error("Knowledge target changed after preview; create a fresh proposal before committing");
@@ -99,7 +99,7 @@ export async function commitKnowledge(configPath: string, proposalId: string) {
       : proposal.targetHeading
         ? insertAtHeading(existing, proposal.targetHeading, proposal.content)
         : `${existing.trimEnd()}\n\n${proposal.content.trimEnd()}\n`;
-    await writeArtifactSetAtomic(config.projectRoot, [{ path: proposal.targetPath, content: next }], () => store.markKnowledgeCommitted(proposalId));
+    await writeArtifactSetAtomic(config.documents.root, [{ path: proposal.targetPath, content: next }], () => store.markKnowledgeCommitted(proposalId));
     return { proposalId, targetPath: proposal.targetPath, contentHash: hash(next) };
   } finally { store.close(); }
 }

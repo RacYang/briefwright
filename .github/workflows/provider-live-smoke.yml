@@ -1,0 +1,45 @@
+name: Optional Provider Live Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider preset to validate
+        required: true
+        type: choice
+        options: [openai, anthropic, gemini, qwen]
+
+permissions:
+  contents: read
+
+jobs:
+  provider-live-smoke:
+    runs-on: ubuntu-latest
+    environment: live-smoke
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with: { version: 11.16.0 }
+      - uses: actions/setup-node@v6
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Validate the selected maintainer BYOK integration
+        env:
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          case "$PROVIDER" in
+            openai) test -n "$OPENAI_API_KEY" ;;
+            anthropic) test -n "$ANTHROPIC_API_KEY" ;;
+            gemini) test -n "$GEMINI_API_KEY" ;;
+            qwen) test -n "$DASHSCOPE_API_KEY" ;;
+            *) exit 2 ;;
+          esac
+          project_dir="$(mktemp -d)"
+          node dist/cli.js --json setup --yes --directory "$project_dir" --model "$PROVIDER" --process-store sqlite --document-store local >/dev/null
+          node dist/cli.js --json doctor --online --config "$project_dir/briefing.yaml"

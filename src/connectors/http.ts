@@ -8,6 +8,9 @@ import type { SourceDefinition } from "../config/types.js";
 export function allowedHostsForSource(source: SourceDefinition): string[] {
   if (source.connector.type === "github-releases") return ["api.github.com"];
   if (source.connector.type === "rss") return [new URL(source.connector.config.url).hostname];
+  if (source.connector.type === "webpage") return [new URL(source.connector.config.url).hostname];
+  if (source.connector.type === "x-api") return ["api.x.com"];
+  if (source.connector.type === "codex-browser") return [];
   const value = source.connector.config.options.allowedHosts;
   if (!Array.isArray(value) || !value.length || value.some((host) => typeof host !== "string" || !/^[A-Za-z0-9.-]+$/.test(host))) {
     throw new Error(`Extension source ${source.id} must declare options.allowedHosts`);
@@ -41,18 +44,23 @@ export function assertPublicAddress(address: string, allowBenchmarkProxy = false
 }
 
 function createSecureLookup(allowedHosts: Set<string>): LookupFunction {
-  return (hostname, options, callback) => lookup(hostname, options, (error, address, family) => {
-    if (error) return callback(error, address, family);
+  return (hostname, options, callback) => {
+    let settled = false;
+    const finish: typeof callback = (error, address, family) => { if (settled) return; settled = true; clearTimeout(timer); callback(error, address, family); };
+    const timer = setTimeout(() => finish(Object.assign(new Error(`DNS lookup timed out for ${hostname}`), { code: "ETIMEOUT" }) as NodeJS.ErrnoException, "", 0), 5_000);
+    lookup(hostname, options, (error, address, family) => {
+    if (error) return finish(error, address, family);
     try {
       const addresses = Array.isArray(address) ? address.map((item) => item.address) : [address];
       for (const item of addresses) {
         assertPublicAddress(item, allowedHosts.has(normalizedHostname(hostname)));
       }
-      callback(null, address, family);
+      finish(null, address, family);
     } catch (lookupError) {
-      callback(lookupError as NodeJS.ErrnoException, address, family);
+      finish(lookupError as NodeJS.ErrnoException, address, family);
     }
-  });
+    });
+  };
 }
 
 export function assertPublicHttpsUrl(rawUrl: string): URL {
@@ -71,10 +79,10 @@ export function createHttpClient(options: {
   retries: number;
   allowedHosts: string[];
   userAgent?: string;
-}): (url: string, init?: RequestInit) => Promise<Response> {
+}): ((url: string, init?: RequestInit) => Promise<Response>) & { close(): Promise<void> } {
   const allowedHosts = new Set(options.allowedHosts.map(normalizedHostname));
   const secureDispatcher = new Agent({ connect: { lookup: createSecureLookup(allowedHosts) } });
-  return async (rawUrl, init = {}) => {
+  const client = async (rawUrl: string, init: RequestInit = {}) => {
     const url = assertPublicHttpsUrl(rawUrl);
     if (!allowedHosts.has(normalizedHostname(url.hostname))) {
       throw new Error(`Connector host is not declared by the active preset: ${url.hostname}`);
@@ -107,6 +115,7 @@ export function createHttpClient(options: {
 
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   };
+  return Object.assign(client, { close: () => secureDispatcher.close() });
 }
 
 export async function readTextLimited(response: Response, maximumBytes: number): Promise<string> {

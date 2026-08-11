@@ -2,9 +2,17 @@
   "id": "qwen",
   "version": "1.0.0",
   "protocol": "openai-chat-completions",
-  "model": "qwen3.7-flash",
+  "model": "qwen3.6-flash",
   "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "apiKey": { "provider": "env", "key": "DASHSCOPE_API_KEY" },
   "timeoutSeconds": 60,
-  "retries": 2
+  "retries": 2,
+  "endpointPolicy": {
+    "allowedHosts": [
+      "dashscope.aliyuncs.com",
+      "dashscope-intl.aliyuncs.com",
+      "dashscope-us.aliyuncs.com"
+    ],
+    "allowedHostSuffixes": ["maas.aliyuncs.com"]
+  }
 }

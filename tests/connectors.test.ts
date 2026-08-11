@@ -4,6 +4,8 @@ import type { SourceDefinition } from "../src/config/types.js";
 import { GithubReleasesConnector } from "../src/connectors/github-releases.js";
 import { assertPublicAddress, assertPublicHttpsUrl, readTextLimited } from "../src/connectors/http.js";
 import { RssConnector } from "../src/connectors/rss.js";
+import { WebpageConnector } from "../src/connectors/webpage.js";
+import { retainExcerpt } from "../src/connectors/retention.js";
 import type { ConnectorContext } from "../src/connectors/types.js";
 
 function contextWith(response: Response): ConnectorContext {
@@ -33,6 +35,24 @@ describe("connector network boundary", () => {
 
   it("rejects response bodies larger than the declared runtime limit", async () => {
     await expect(readTextLimited(new Response("0123456789"), 5)).rejects.toThrow("exceeds");
+  });
+});
+
+describe("capture retention boundary", () => {
+  it("retains at most 25 English or CJK words", () => {
+    expect(retainExcerpt(Array.from({ length: 30 }, (_, index) => `word${index}`).join(" ")).split(" ")).toHaveLength(25);
+    expect([...new Intl.Segmenter("zh", { granularity: "word" }).segment(retainExcerpt("这是一个用于验证版权留存边界的中文句子".repeat(10)))].filter((entry) => entry.isWordLike).length).toBeLessThanOrEqual(25);
+  });
+
+  it("hashes a bounded webpage body but persists only a 25-word excerpt and metadata", async () => {
+    const text = Array.from({ length: 60 }, (_, index) => `word${index}`).join(" ");
+    const response = new Response(`<html lang="en"><head><title>Example</title></head><body>${text}</body></html>`, {
+      status: 200, headers: { "content-type": "text/html", etag: "v1", "last-modified": "Mon, 10 Aug 2026 00:00:00 GMT" },
+    });
+    const capture = (await new WebpageConnector().capture({ id: "WEB-TEST", title: "Web", evidenceTier: "primary", connector: { type: "webpage", config: { url: "https://example.com/news" } } }, contextWith(response)))[0]!;
+    expect(capture.summary.split(" ")).toHaveLength(25);
+    expect(capture.analysisText).toContain("word59");
+    expect(capture).toMatchObject({ fetchStatus: "success", extractStatus: "success", httpStatus: 200, contentType: "text/html", language: "en", etag: "v1", parserVersion: "1.0.0" });
   });
 });
 

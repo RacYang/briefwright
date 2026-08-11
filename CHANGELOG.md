@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0 - 2026-08-11
+
+- rebaseline completion against the production nine-entity AI-intelligence contract instead of the narrower historical local matrix;
+- add guided provider/store/document setup, generic OpenAI-compatible and Anthropic protocols, a bounded local Codex provider, and reviewed OpenAI, Gemini, Qwen, Anthropic, and Ollama presets;
+- add Lark CLI Feishu import, validation, Chinese-field mapping, stable-ID link resolution, plan/apply sync, PostgreSQL and MySQL stores, and SQLite fallback;
+- add Obsidian/local document boundaries with production Daily/Review paths, managed indexes, valid empty artifacts, and human-confirmed knowledge writes;
+- add bounded webpages, official X API v2 and a validated Codex read-only browser capture bridge, remote due-source hydration, complete run reports, control-plane synchronization, and digest-bound Codex independent-task export;
+- import and bind an existing full execution contract, and adopt an already-terminal remote same-day run without overwriting its Daily/Review artifacts or duplicating process-store writes;
+- preserve bounded full evidence only in memory while persisting 25-word excerpts, record failed captures and canonical rule-bound events, enforce X as clue-only, and add coverage-gap scheduling plus source/model latency, token, and known-cost observations;
+- make PostgreSQL/MySQL provisioning explicit so doctor and sync planning stay read-only, and validate schema versions before use;
+- expand feedback, durable improvement diagnoses and proposals, and an approval gate that rejects harmful or non-improving experiments;
+- replace Qwen-only onboarding with bilingual, vendor-neutral user paths and focused provider, Lark, database, document, and improvement guides.
+
 ## 1.0.0 - 2026-08-11
 
 - declare the complete local-first briefing runtime, governance lifecycle, Codex Skill, connector

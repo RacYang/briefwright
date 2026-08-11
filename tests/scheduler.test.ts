@@ -8,10 +8,36 @@ import { scheduleDefinition } from "../src/scheduler/definition.js";
 import { initializeProject } from "../src/commands/init.js";
 import { previewProject } from "../src/commands/preview.js";
 import { scheduleReadiness } from "../src/commands/schedule.js";
+import { codexAutomationDefinition } from "../src/scheduler/codex.js";
+import { loadEffectiveConfig } from "../src/config/load.js";
 
 const base = { schedule: "weekdays-at-09" as const, projectRoot: "/tmp/brief project", configPath: "/tmp/brief project/briefing.yaml", executable: "/usr/bin/node", cliPath: "/opt/briefwright/cli.js" };
 
 describe("scheduler definitions", () => {
+  it("exports a digest-bound Codex task with conditional browser capture", async () => {
+    const project = await mkdtemp(path.join(tmpdir(), "briefwright-codex-schedule-"));
+    const configPath = await initializeProject({
+      directory: project,
+      yes: true,
+      schedule: "daily-at-10",
+      model: "codex",
+      processStore: { driver: "lark", baseToken: "base-test", xCapture: "codex-browser" },
+    });
+    const config = await loadEffectiveConfig(configPath);
+    const definition = await codexAutomationDefinition(config, configPath);
+    expect(definition).toMatchObject({
+      status: "ACTIVE",
+      rrule: "FREQ=DAILY;BYHOUR=10;BYMINUTE=0;BYSECOND=0",
+      configDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      cliDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      contractDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(definition.prompt).toContain(`cli: ${definition.cliPath}`);
+    expect(definition.prompt).toContain("manifest 有来源");
+    expect(definition.prompt).toContain("零来源不建 bundle");
+    expect(definition.prompt).not.toContain("briefwright --json run");
+  });
+
   it("renders platform-native definitions without installing them", () => {
     const mac = scheduleDefinition({ ...base, platform: "darwin" });
     const linux = scheduleDefinition({ ...base, platform: "linux" });

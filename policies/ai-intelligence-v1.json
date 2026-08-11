@@ -26,8 +26,8 @@
     "perDomainMaximum": 3
   },
   "domains": [
-    "foundation-models", "agents", "developer-tools", "multimodal", "safety-governance",
-    "research", "industry-products", "china-ecosystem"
+    "基础", "机器学习与深度学习", "模型与生成式 AI", "数据与知识",
+    "系统与工程", "安全与治理", "应用域", "Agent"
   ],
   "retention": { "quoteWordLimit": 25 }
 }

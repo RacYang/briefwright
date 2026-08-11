@@ -61,7 +61,14 @@ export async function applyAdvancedResources(config: EffectiveConfig): Promise<E
     if (value.kind === "Profile") {
       const spec = value.spec as { runtime?: Partial<EffectiveConfig["runtime"]>; provider?: Partial<ProviderDefinition> };
       if (spec.runtime) { next.runtime = { ...next.runtime, ...spec.runtime }; origins.runtime = resourcePath; }
-      if (spec.provider) { next.provider = { ...next.provider, ...spec.provider, apiKey: spec.provider.apiKey ?? next.provider.apiKey }; origins.provider = resourcePath; }
+      if (spec.provider) {
+        next.provider = {
+          ...next.provider,
+          ...spec.provider,
+          ...((spec.provider.apiKey ?? next.provider.apiKey) ? { apiKey: spec.provider.apiKey ?? next.provider.apiKey } : {}),
+        };
+        origins.provider = resourcePath;
+      }
     } else if (value.kind === "PolicyBundle") {
       next.policy = value.spec as unknown as PolicyDefinition; validatePolicy(next.policy); origins.policy = resourcePath;
     } else if (value.kind === "PromptPack") {

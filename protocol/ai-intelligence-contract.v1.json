@@ -1,0 +1,36 @@
+{
+  "contractId": "AI-INTELLIGENCE-DAILY",
+  "contractVersion": "1.0",
+  "timezone": "Asia/Shanghai",
+  "runIdPattern": "^RUN-\\d{8}-DAILY(?:-R\\d{2})?$",
+  "sameDayIdempotent": true,
+  "stages": [
+    "initialize", "freeze_due_manifest", "discover", "capture", "write_receipts", "normalize",
+    "verify_evidence", "deduplicate", "score", "select", "publish", "persist", "validate_integrity", "complete"
+  ],
+  "activeRuleIds": [
+    "RULE-WORKFLOW-V1.3", "RULE-SCORE-V1.0", "RULE-SELECTION-V1.1", "RULE-SOURCE-V1.1",
+    "RULE-IMPROVEMENT-V1.0", "RULE-RETENTION-V1.0", "RULE-REVIEW-OUTPUT-V1.1"
+  ],
+  "integrity": {
+    "exactlyOneReceiptPerDueSource": true,
+    "emptyDailyAndReviewRequired": true,
+    "partialOnSourceModelOrControlPlaneFailure": true,
+    "preserveFailuresAndRejections": true
+  },
+  "documents": {
+    "briefingRoot": "Inbox/AI Intelligence",
+    "dailyPath": "Daily/YYYY-MM-DD-AI情报简报.md",
+    "reviewPath": "Review/YYYY-MM-DD-AI情报待复核.md",
+    "dailyIndex": "Note-AI情报候选池.md",
+    "reviewIndex": "Note-AI情报待复核.md",
+    "dailyMarker": "ai-intelligence-digest",
+    "reviewMarker": "ai-intelligence-review",
+    "forbiddenAutomaticWrites": ["Resources/AI", "Ref", "Note"]
+  },
+  "completionReportFields": [
+    "due", "receipts", "updated", "unchanged", "failed", "skipped", "missing", "missingSourceIds",
+    "discovered", "captured", "verified", "deduplicated", "scored", "daily", "review", "eliminated",
+    "errors", "domainCounts", "topItemIds", "ruleContractValid", "processStoreValid", "documentStoreValid"
+  ]
+}

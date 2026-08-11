@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { SourceDefinition } from "../config/types.js";
 import { assertPublicHttpsUrl, readJsonLimited } from "./http.js";
+import { retainExcerpt } from "./retention.js";
 import type { CaptureEnvelope, Connector, ConnectorContext } from "./types.js";
 
 type GithubSource = SourceDefinition & {
@@ -25,7 +26,7 @@ function summary(body: string | null): string {
     .replace(/[#>*_`\[\]()]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return plain.split(/\s+/u).slice(0, 25).join(" ").slice(0, 500);
+  return retainExcerpt(plain);
 }
 
 export class GithubReleasesConnector implements Connector<GithubSource> {
@@ -53,7 +54,8 @@ export class GithubReleasesConnector implements Connector<GithubSource> {
     const response = await context.fetch(this.apiUrl(source), {
       headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
     });
-    return response.ok
+    const ok = response.ok; await response.body?.cancel();
+    return ok
       ? { ok: true, detail: `${source.connector.config.repository} is accessible` }
       : { ok: false, detail: `GitHub returned HTTP ${response.status}` };
   }
@@ -96,6 +98,14 @@ export class GithubReleasesConnector implements Connector<GithubSource> {
           ...(release.published_at ? { publishedAt: release.published_at } : {}),
           contentHash: createHash("sha256").update(content).digest("hex"),
           evidenceClass: "primary" as const,
+          discoveryUrl: this.apiUrl(source), discoveryChannel: "github-releases", fetchStatus: "success" as const,
+          extractStatus: "success" as const, httpStatus: response.status, attempts: 1,
+          contentType: response.headers.get("content-type") ?? "application/json", author: source.connector.config.repository,
+          ...(release.published_at ? { publishedRaw: release.published_at } : {}),
+          ...(response.headers.get("etag") ? { etag: response.headers.get("etag")! } : {}),
+          ...(response.headers.get("last-modified") ? { lastModified: response.headers.get("last-modified")! } : {}),
+          parserVersion: this.descriptor.version,
+          analysisText: (release.body ?? "").slice(0, 20_000),
         }];
       });
   }

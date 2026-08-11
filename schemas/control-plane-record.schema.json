@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://briefwright.dev/schemas/control-plane-record.v1.json",
+  "title": "Briefwright canonical control-plane record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "id", "payload"],
+  "properties": {
+    "kind": { "enum": ["sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts"] },
+    "id": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "payload": { "type": "object" },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": { "$ref": "#/$defs/ids" }, "runs": { "$ref": "#/$defs/ids" }, "items": { "$ref": "#/$defs/ids" },
+        "events": { "$ref": "#/$defs/ids" }, "feedback": { "$ref": "#/$defs/ids" }, "experiments": { "$ref": "#/$defs/ids" },
+        "captures": { "$ref": "#/$defs/ids" }, "rules": { "$ref": "#/$defs/ids" }, "receipts": { "$ref": "#/$defs/ids" }
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "storeRecordId": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "ids": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+  },
+  "allOf": [
+    { "if": { "properties": { "kind": { "const": "sources" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["id", "title", "connector"] } } } },
+    { "if": { "properties": { "kind": { "const": "runs" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["run_id", "status", "config_digest"] } } } },
+    { "if": { "properties": { "kind": { "const": "items" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["item_id", "title", "score", "disposition"] } } } },
+    { "if": { "properties": { "kind": { "const": "events" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["event_id", "event_type", "idempotency_key", "payload_fingerprint"] } } } },
+    { "if": { "properties": { "kind": { "const": "feedback" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["feedback_id", "feedback_type"] } } } },
+    { "if": { "properties": { "kind": { "const": "experiments" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["experiment_id", "status"] } } } },
+    { "if": { "properties": { "kind": { "const": "captures" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["capture_id", "source_id", "canonical_url", "content_hash"] } } } },
+    { "if": { "properties": { "kind": { "const": "rules" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["id", "version", "title"] } } } },
+    { "if": { "properties": { "kind": { "const": "receipts" } } }, "then": { "properties": { "payload": { "type": "object", "required": ["run_id", "source_id", "result"] } } } }
+  ]
+}

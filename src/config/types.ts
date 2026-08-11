@@ -1,12 +1,36 @@
 export interface BriefingIntent {
-  version: 2;
+  version: 3;
   name: string;
-  preset: "ai-daily";
+  preset: string;
   interests: string[];
   schedule: "manual" | "daily-at-10" | "weekdays-at-09";
   output: "markdown";
   outputDirectory: string;
-  ai: "qwen";
+  sourceContract?: { path: string; sha256: string };
+  model: string | {
+    provider: string;
+    protocol?: ProviderDefinition["protocol"];
+    model?: string;
+    reasoningEffort?: ProviderDefinition["reasoningEffort"];
+    baseUrl?: string;
+    apiKey?: SecretReference;
+    allowedHosts?: string[];
+    allowInsecureLocalhost?: boolean;
+  };
+  processStore: "auto" | "sqlite" | {
+    driver: "lark" | "postgres" | "mysql" | "sqlite";
+    baseToken?: string;
+    profile?: string;
+    identity?: "user" | "bot";
+    xCapture?: "api" | "codex-browser";
+    tables?: Partial<LarkTableMapping>;
+    connection?: SecretReference;
+  };
+  documentStore: "auto" | "local" | "obsidian" | {
+    driver: "local" | "obsidian";
+    root?: string;
+    briefingDirectory?: string;
+  };
 }
 
 export interface SecretReference {
@@ -18,6 +42,19 @@ export interface RuleSnapshot {
   id: string;
   version: string;
   title: string;
+}
+
+export interface ProtocolDefinition {
+  contractId: string;
+  contractVersion: string;
+  timezone: string;
+  runIdPattern: string;
+  sameDayIdempotent: boolean;
+  stages: string[];
+  activeRuleIds: string[];
+  integrity: Record<string, boolean>;
+  documents: Record<string, unknown>;
+  completionReportFields: string[];
 }
 
 export interface ScoreDimensionDefinition {
@@ -48,20 +85,51 @@ export interface PromptPackDefinition {
 }
 
 export interface ProviderDefinition {
-  id: "qwen";
+  id: string;
   version: string;
-  protocol: "openai-chat-completions";
+  protocol: string;
   model: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh";
   baseUrl: string;
-  apiKey: SecretReference;
+  apiKey?: SecretReference;
   timeoutSeconds: number;
   retries: number;
+  endpointPolicy: {
+    allowedHosts: string[];
+    allowedHostSuffixes?: string[];
+    allowInsecureLocalhost?: boolean;
+  };
+}
+
+export interface LarkTableMapping {
+  sources: string;
+  runs: string;
+  items: string;
+  events: string;
+  feedback: string;
+  experiments: string;
+  captures: string;
+  rules: string;
+  receipts: string;
 }
 
 export interface SourceDefinition {
   id: string;
   title: string;
   domain?: string;
+  enabled?: boolean;
+  sourceType?: "website" | "official-blog" | "official-docs" | "github" | "x" | "paper" | "regulation" | "media" | "other";
+  evidenceTier?: "primary" | "clue" | "secondary";
+  coverageDomains?: string[];
+  priority?: number;
+  scheduleState?: {
+    frequency?: "daily" | "weekly" | "on-demand";
+    lastScanAt?: string;
+    lastSuccessAt?: string;
+    lastEffectiveUpdateAt?: string;
+    nextScanAt?: string;
+    humanLocked?: boolean;
+  };
   cadence?: { minimumHours: number; defaultHours: number; maximumHours: number };
   connector:
     | {
@@ -71,6 +139,18 @@ export interface SourceDefinition {
     | {
         type: "rss";
         config: { url: string };
+      }
+    | {
+        type: "webpage";
+        config: { url: string };
+      }
+    | {
+        type: "x-api";
+        config: { username: string; bearerToken: SecretReference };
+      }
+    | {
+        type: "codex-browser";
+        config: { username: string };
       }
     | {
         type: "extension";
@@ -90,7 +170,7 @@ export interface PresetDefinition {
 }
 
 export interface EffectiveConfig {
-  configVersion: 2;
+  configVersion: 3;
   projectRoot: string;
   name: string;
   preset: PresetDefinition;
@@ -104,6 +184,24 @@ export interface EffectiveConfig {
     driver: "sqlite";
     path: string;
   };
+  controlPlane: {
+    driver: "lark" | "postgres" | "mysql" | "sqlite";
+    mode: "configured" | "fallback";
+    lark?: {
+      baseToken: string;
+      profile?: string;
+      identity: "user" | "bot";
+      tables: LarkTableMapping;
+      xCapture: "api" | "codex-browser";
+    };
+    connection?: SecretReference;
+  };
+  documents: {
+    driver: "local" | "obsidian";
+    mode: "configured" | "fallback";
+    root: string;
+    briefingDirectory: string;
+  };
   runtime: {
     httpConcurrency: number;
     modelConcurrency: number;
@@ -114,6 +212,8 @@ export interface EffectiveConfig {
   policy: PolicyDefinition;
   prompts: PromptPackDefinition;
   provider: ProviderDefinition;
+  protocol: ProtocolDefinition;
+  sourceContract?: { path: string; sha256: string };
   provenance: {
     coreVersion: string;
     intentVersion: number;
@@ -122,6 +222,10 @@ export interface EffectiveConfig {
     promptVersion: string;
     providerVersion: string;
     policyOrigin: "packaged" | "approved-experiment";
+    controlPlaneRevision?: string;
+    contractVersion: string;
+    contractDigest: string;
+    sourceContractDigest?: string;
   };
   origins: Record<string, string>;
 }

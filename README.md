@@ -1,269 +1,196 @@
 # Briefwright
 
-<p align="center">
-  <strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a>
-</p>
+<p align="center"><strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a></p>
 
-<p align="center">
-  <a href="https://github.com/RacYang/briefwright/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/RacYang/briefwright"></a>
-  <a href="https://github.com/RacYang/briefwright/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RacYang/briefwright/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="./LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/github/license/RacYang/briefwright"></a>
-  <img alt="Node.js 22.13 or newer" src="https://img.shields.io/badge/Node.js-%E2%89%A522.13-339933?logo=node.js&logoColor=white">
-</p>
+Briefwright turns monitored sources into an auditable Daily briefing, a human Review queue, and a governed improvement loop. It is the open-source form of a production AI-intelligence workflow: one receipt per due source, canonical evidence, global deduplication, seven-dimension scoring, valid empty outputs, immutable replay, and explicit human approval before knowledge or rule changes.
 
-Briefwright is a local-first briefing builder that turns public sources into calm, source-linked AI
-intelligence. It gives new users one small intent file while preserving the receipts, evidence
-gates, policy versions, failures, and replay data needed to trust a recurring briefing.
+It is vendor-neutral:
 
-**Simple at the surface, rigorous underneath:**
+| Layer | Recommended | Other supported choices | No-configuration behavior |
+|---|---|---|---|
+| AI model | Choose during setup | Local Codex account, OpenAI, Anthropic, Gemini, Qwen, Ollama, or a registered compatible provider | Fixture preview works without AI; real runs need the selected provider |
+| Process data | Feishu Base through `lark-cli` | PostgreSQL, MySQL, SQLite | Explicit SQLite fallback |
+| Documents | Obsidian Markdown vault | Normal local folder | Explicit local-folder fallback |
+| Scheduling | Codex independent-task automation or native scheduler | launchd, cron, Windows Task Scheduler | Manual until enabled |
 
-- start offline in two minutes, without an account or API key;
-- configure interests, schedule, and output in one short YAML file;
-- keep credentials on your machine and bring your own Qwen key for real runs;
-- trace every selected item back to evidence and every due source to a receipt;
-- preview schedules and knowledge changes before anything writes outside the run.
+## Start without reading configuration files
 
-## Quick start
-
-### Install the stable release
-
-Requirements: Node.js 22.13 or newer on macOS, Linux, or Windows.
+Requirements: Node.js 22.13 or newer. Download `briefwright-2.0.0.tgz` from the GitHub Release and install it, or build from source:
 
 ```bash
-npm install -g https://github.com/RacYang/briefwright/releases/download/v1.0.0/briefwright-1.0.0.tgz
-briefwright demo
+npm install -g ./briefwright-2.0.0.tgz
 ```
 
-`demo` is deterministic and offline. It creates an example briefing without installing a schedule,
-calling a model, or writing to a knowledge base.
-
-To create your own briefing:
+From a source checkout:
 
 ```bash
-mkdir my-briefing && cd my-briefing
-briefwright init
-briefwright preview
-```
-
-The generated `briefing.yaml` is the ordinary user interface:
-
-```yaml
-version: 2
-name: My AI briefing
-preset: ai-daily
-interests:
-  - AI agents
-  - model releases
-  - AI safety
-schedule: manual
-output: markdown
-outputDirectory: briefs
-ai: qwen
-```
-
-The default preview uses bundled fixtures, so it also needs no credential or network access.
-
-<details>
-<summary>Install from source</summary>
-
-```bash
-git clone https://github.com/RacYang/briefwright.git
-cd briefwright
 pnpm install
 pnpm build
-node dist/cli.js demo
+npm link
+
+mkdir my-briefing && cd my-briefing
+briefwright setup
 ```
 
-</details>
+`setup` asks five things: briefing topic, model, process store, document destination, and schedule. It writes `briefing.yaml`; you do not need to write YAML yourself.
 
-<details>
-<summary>Verify the release artifact</summary>
+In Codex, install the packaged `skill/briefwright` Skill and ask in ordinary language—for example, “Create a daily AI briefing with Feishu for process data and Obsidian for documents.” The Skill operates the same CLI on your behalf. Users do not need to memorize commands, and the Skill owns no second schema, rule set, or state store. The CLI is the auditable execution layer, not an onboarding prerequisite.
 
-Briefwright publishes GitHub artifact attestations. With the GitHub CLI installed:
+Then use the safe progression:
 
 ```bash
-gh release download v1.0.0 --repo RacYang/briefwright --pattern 'briefwright-1.0.0.tgz'
-gh attestation verify briefwright-1.0.0.tgz --repo RacYang/briefwright
-```
-
-</details>
-
-## What you get
-
-```text
-my-briefing/
-├── briefing.yaml              # the file most users edit
-├── .env.local                 # optional local credential, ignored by Git
-├── .briefwright/state.db      # local run, receipt, feedback, and audit state
-└── briefs/
-    ├── Daily/                 # high-confidence selected items
-    └── Review/                # promising items that need human review
-```
-
-| Concern | Briefwright's behavior |
-|---|---|
-| Setup | One intent file; advanced resources stay hidden until ejected |
-| Collection | Incremental, bounded connectors with one receipt per due source |
-| Evidence | Primary evidence and claim support are required for selection |
-| Selection | Deterministic scoring, thresholds, diversity caps, and valid empty output |
-| Failures | Partial and failed outcomes stay visible; errors do not become facts |
-| State | Local SQLite snapshots plus readable Markdown artifacts |
-| Automation | Native schedules require a fresh live preview and explicit confirmation |
-| Knowledge | Proposals are previewed; commits require human confirmation and target-hash checks |
-
-## How it works
-
-```mermaid
-flowchart LR
-  A["Public sources"] --> B["Read-only connectors"]
-  B --> C["Frozen run snapshot"]
-  C --> D["Qwen or offline fixture"]
-  D --> E["Evidence checks, deduplication, scoring"]
-  E --> F["Daily"]
-  E --> G["Review"]
-  E --> H["Machine-only records"]
-  F --> I["Markdown + SQLite"]
-  G --> I
-  H --> I
-  I --> J["Feedback and guarded experiments"]
-  F -. "explicit proposal + confirmation" .-> K["Knowledge notes"]
-```
-
-A run freezes the effective configuration, source manifest, policy, and prompt versions. It then
-collects only due sources, records exactly one receipt for each, validates structured model output,
-checks claim support, deduplicates, scores, selects, and persists an immutable audit snapshot.
-Rendering and replay are deterministic and offline.
-
-## Run a real briefing with Qwen
-
-Briefwright is bring-your-own-key. Put a test or production key in an ignored local file—never in
-`briefing.yaml`:
-
-```bash
-cp .env.example .env.local
-# Edit .env.local and set DASHSCOPE_API_KEY
-
-briefwright doctor --online
-briefwright run
-briefwright status
+briefwright preview                 # offline fixture; proves rendering only
+briefwright doctor                  # local configuration, paths, and database
+briefwright preview --live          # real source collection; no schedule installed
+briefwright doctor --online         # selected model + store + source checks
+briefwright run                     # formal AI briefing
 briefwright open
 ```
 
-Alibaba Model Studio keys and endpoints are region and workspace specific. Briefwright accepts the
-pay-as-you-go and trial OpenAI-compatible endpoints for Beijing, Singapore, Virginia, Tokyo, and
-Frankfurt, including workspace-dedicated domains. Coding Plan and Token Plan keys are rejected
-because those plans target interactive coding tools rather than recurring backend jobs. If online
-preflight reports model access denied, see [configuration](docs/configuration.md) for regional model
-and endpoint settings.
+`preview` is intentionally offline and does not use AI. It proves onboarding and document rendering. `run` is the real AI workflow and requires the selected model to be available.
 
-## Scheduling
+Nothing is scheduled by setup. A schedule requires a recent untampered live preview, a passing online doctor, and explicit confirmation.
 
-Set `schedule` in `briefing.yaml` to `daily-at-10` or `weekdays-at-09`. Briefwright supports launchd
-on macOS, user cron on Linux, and Task Scheduler on Windows.
+## Choose any supported model
 
-Before enabling a schedule, it requires a successful, untampered live preview of the current
-configuration from the last seven days and a passing online preflight:
+Briefwright never assumes Qwen. Setup detects common local environment variables and lets you choose:
+
+| Provider | Default model preset | Local secret reference |
+|---|---|---|
+| Codex | `gpt-5.6-sol` | reuses the local Codex login; no separate API key |
+| OpenAI | `gpt-5-mini` | `OPENAI_API_KEY` |
+| Anthropic | `claude-sonnet-5` | `ANTHROPIC_API_KEY` |
+| Google Gemini | `gemini-3.6-flash` | `GEMINI_API_KEY` |
+| Alibaba Qwen | `qwen3.6-flash` | `DASHSCOPE_API_KEY` |
+| Ollama | `qwen3:8b` at localhost | no key |
+
+Provider presets use official APIs and can be overridden by a typed custom provider. Secrets are `env` or `file` references; plaintext values do not enter `briefing.yaml`, hashes, SQLite snapshots, JSON output, or errors. See [model providers](docs/providers.md).
+
+## Feishu Base with `lark-cli`
+
+Feishu is the recommended collaborative process-data store, not the only store. Briefwright delegates Feishu identity and authorization to the installed `lark-cli`; it does not embed another OAuth client.
 
 ```bash
-briefwright preview --live
+lark-cli whoami
+briefwright setup \
+  --process-store lark \
+  --lark-base YOUR_BASE_APP_TOKEN \
+  --document-store obsidian \
+  --document-root "/absolute/path/to/Your Vault"
+
+briefwright lark provision --yes  # new Base: idempotently create missing standard tables, fields, and links
 briefwright doctor --online
-briefwright schedule describe
-briefwright schedule enable --yes
+briefwright import lark
+briefwright sync plan
+briefwright sync apply --yes
 ```
 
-`schedule: manual` is rejected instead of installing a no-op task. Run
-`briefwright schedule disable --yes` to remove a schedule created by Briefwright.
+The adapter discovers the nine standard Chinese table names for sources, runs, captures, receipts, items, events, feedback, experiments, and rules; it never uses another user's hard-coded table IDs. Existing deployments may override each name with their own ID. `lark provision --yes` idempotently fills missing tables, fields, and relationships without deleting, renaming, or overwriting existing data. Runtime reads are paginated, links resolve through stable business IDs, writes use a two-pass upsert, and partial synchronization remains visible. `doctor` uses a CLI dry run and does not create a record.
 
-## Trust and governance
+If Feishu is not selected, PostgreSQL and MySQL use the same canonical record contract. If nothing is configured, Briefwright says it is using local-only SQLite. See [process stores](docs/process-stores.md) and [Lark setup](docs/lark.md).
 
-- Daily requires a score of at least 70. Review accepts 60–69 only when the stable-knowledge gate
-  also passes.
-- Daily contains at most 12 items and three per domain. A truthful empty artifact is valid.
-- Unsupported model claims are excluded rather than promoted.
-- Same-day formal runs are idempotent; interrupted finalization is resumable.
-- `run --retry-failed` creates a linked immutable recovery run instead of rewriting history.
-- `replay` regenerates recorded artifacts offline and checks both snapshot and current-file hashes.
-- Feedback cannot change policy directly. Experiments need enough reviewed evidence, explicit
-  approval, activation, and a rollback path.
-- Source cadence changes follow the same propose, review, approve, or reject boundary.
-- Knowledge changes are previewed proposals. A commit is refused if the target changed after preview.
+## Obsidian or a local folder
 
-For the detailed boundaries, read the [threat model](docs/threat-model.md) and
-[security policy](SECURITY.md).
+Obsidian is a document experience over Markdown, not a hidden database dependency. The Obsidian adapter writes only to the configured briefing root:
+
+```text
+Inbox/AI Intelligence/
+├── Daily/YYYY-MM-DD-AI情报简报.md
+├── Review/YYYY-MM-DD-AI情报待复核.md
+├── Note-AI情报候选池.md
+└── Note-AI情报待复核.md
+```
+
+The indexes use managed markers and Wiki-links. Empty Daily and Review files are still produced. Automatic runs cannot write evergreen notes. `knowledge propose` creates a preview; `knowledge commit --yes` verifies the target hash before the approved write. Without an Obsidian vault, the same artifacts go to a normal local folder. See [document stores](docs/document-stores.md).
+
+## What a formal run does
+
+```mermaid
+flowchart LR
+  A["Freeze due sources + rules"] --> B["Bounded connector lanes"]
+  B --> C["One receipt per due source"]
+  C --> D["Model-independent structured analysis"]
+  D --> E["Evidence verification + global dedup"]
+  E --> F["Seven-dimension scoring"]
+  F --> G["Daily"]
+  F --> H["Review"]
+  F --> I["Machine-only"]
+  G --> J["Document store"]
+  H --> J
+  I --> K["Process store"]
+  J --> K
+  K --> L["Feedback → diagnosis → frozen experiment → approval/rollback"]
+```
+
+The 14 observable stages are initialize, freeze due manifest, discover, capture, receipts, normalize, evidence verification, deduplication, score, select, publish, persist, integrity validation, and complete. Every explicit URL has a successful or failed capture record with available HTTP and parser metadata; protected source text is limited to a 25-word excerpt. The bounded completion report includes due/receipt/update/failure/missing counts, stage counts, p50/p95 source latency, capture throughput, failed source IDs, domains, top items, seven Rule IDs, and process/document validation.
+
+Current source types include RSS, GitHub Releases, bounded webpages, the official X API v2, a Codex read-only browser bridge, and extension connectors. X remains clue-only: a post cannot pass the primary-evidence gate without its canonical first-party source. An independent Codex task may use `codex-browser`: the CLI emits only the currently due accounts, Codex reads public pages without interaction, and the CLI accepts only a schema-, account-, and status-URL-bound temporary bundle. Users can instead supply `X_BEARER_TOKEN` for the official API. Missing bundles, credentials, and capture failures produce explicit failed receipts. A bounded full source body may exist only in memory for the current analysis pass; SQLite, Base, snapshots, logs, and model-independent artifacts retain only metadata and the 25-word excerpt.
+
+## Governed self-improvement
+
+Intermediate data has a purpose. Briefwright accepts include, skip, review, compare, classification correction, score correction, source correction, process feedback, usage, and knowledge-worthiness signals.
+
+```bash
+briefwright feedback add AI-... --type used --note "Changed a decision"
+briefwright improve diagnose --window 30
+briefwright improve list
+briefwright experiment create --candidate candidate-policy.json
+briefwright experiment evaluate EXP-...
+briefwright experiment approve EXP-... --yes
+briefwright experiment activate EXP-... --yes
+briefwright experiment rollback EXP-... --yes
+```
+
+Formal runs invoke the diagnosis evaluator at most once every seven days over a 30-day window. Intermediate records can therefore create non-active source-reliability, policy/prompt, provider/model-contract, deduplication, and output/selection proposals; none is activated automatically. Policy experiments freeze at least 14 days and 50 reviewed items, replay baseline and candidate, and compare positive retention, negative selection, primary-evidence compliance, coverage, and selection deltas. A sufficiently large but harmful or merely unchanged candidate cannot be approved. Humans own approval and activation; rollback remains digest-bound. See [self-improvement](docs/self-improvement.md).
+
+## Scheduling like the production workflow
+
+Codex users can export an independent-task definition matching the existing automation boundary:
+
+```bash
+briefwright schedule codex
+```
+
+It freezes the config file, current CLI, packaged execution protocol, and optional source-system contract digests. It conditionally prepares the current X browser manifest, runs online doctor, then performs the formal run through absolute executable paths. The configured Lark/SQL control plane and Obsidian/local document store remain authoritative, and only the bounded completion report is returned. It does not install anything.
+
+For an existing Codex automation, do not hand-copy sources or table mappings. Follow the read-only import, live preview, isolated shadow run, and digest-bound cutover in [Migrating an existing Codex automation](docs/migration-from-codex-automation.md).
+
+Native scheduling is also supported:
+
+```bash
+briefwright schedule describe
+briefwright schedule enable --yes
+briefwright schedule status
+briefwright schedule disable --yes
+```
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `demo` | Offline, credential-free demonstration |
-| `init` | Create one intent file without enabling anything |
-| `preview [--live]` | Fixture preview or read-only public-source preview |
-| `run [--retry-failed]` | Formal incremental pipeline or linked immutable recovery run |
-| `status`, `open`, `replay` | Inspect and verify durable runs |
-| `config validate\|render\|explain\|diff\|migrate\|eject` | Typed configuration lifecycle |
-| `db migrate` | Preview or explicitly apply SQLite migrations |
-| `doctor [--online]` | Offline correctness or online provider and source checks |
-| `schedule describe\|enable\|disable\|status` | Native scheduling with confirmation |
-| `feedback add\|summary` | Record human outcome signals |
-| `experiment create\|evaluate\|approve\|activate\|rollback` | Guarded policy improvement |
-| `cadence evaluate\|list\|approve\|reject\|lock` | Guarded source-frequency governance |
-| `knowledge propose\|commit` | Human-confirmed Markdown or Obsidian integration |
-| `capabilities` | Machine-readable installed feature surface |
+| `setup`, `init`, `demo` | Guided project, minimal project, offline demonstration |
+| `preview [--live]`, `run [--retry-failed]` | Local-only preview and formal/recovery pipeline |
+| `doctor [--online] [--all-sources]`, `status`, `open`, `replay` | Due-source/full diagnostics, inspect, open, and verify |
+| `capture manifest`, `capture validate` | Manifest and bundle checks for Codex read-only browser captures |
+| `import lark`, `import contract` | Versioned read-only import snapshots |
+| `lark provision --yes`, `sql provision --yes` | Explicitly initialize the selected remote process-store schema |
+| `sync plan`, `sync apply --yes` | Review and apply process-store synchronization |
+| `config ...`, `db migrate` | Explainable configuration and separate migrations |
+| `feedback ...`, `improve ...`, `experiment ...`, `cadence ...` | Governed learning loop |
+| `knowledge propose`, `knowledge commit --yes` | Human-confirmed Markdown knowledge writes |
+| `schedule codex`, `schedule ...` | Independent-task export or native scheduling |
+| `capabilities` | Machine-readable feature surface |
 
-Add global `--json` for stable, bounded machine-readable output. The packaged Codex Skill uses this
-surface and owns no separate schema, policy, or durable state.
+Add global `--json` for bounded machine-readable output. The packaged Codex Skill calls the same CLI and owns no parallel schema or state.
 
-## Advanced configuration and connectors
+## Trust boundaries
 
-Most people never need this section. When the intent file cannot express a requirement:
+- Source text is untrusted evidence, never model instructions.
+- Connector hosts are allowlisted; DNS results and private/loopback addresses are checked.
+- Provider endpoints are typed and host-bound; localhost HTTP is allowed only when explicitly declared.
+- Paths are canonicalized and symlink escapes are rejected.
+- Same-day formal runs are idempotent; recovery creates a linked immutable run.
+- Secrets are redacted; external writes require explicit configuration or confirmation.
+- No item is padded into Daily or Review, and failures never become facts.
 
-```bash
-briefwright config eject --yes
-briefwright config validate
-briefwright config explain provider
-```
-
-This creates versioned `Profile`, `PolicyBundle`, `PromptPack`, `Output`, and per-source resources in
-`briefwright.d/`. Unknown fields, unsafe provider endpoints, invalid score weights, broken cadence
-bounds, and unknown source references fail validation. Secrets remain references, not mergeable
-configuration values.
-
-Briefwright ships GitHub Releases and RSS connectors. Extensions use the exported connector SDK and
-must declare capabilities, allowed hosts, configuration schema, timeouts, and bounded response
-behavior. See [configuration](docs/configuration.md) and the [connector contract](docs/connectors.md).
-
-## Scope and non-goals
-
-Briefwright v1 is a self-hosted CLI and Codex Skill, not a hosted feed reader or a managed SaaS.
-It intentionally does not:
-
-- store API keys in project configuration or provide a secret-management service;
-- turn model output into confirmed facts without evidence checks;
-- hide source failures or fabricate items to fill a quota;
-- silently enable operating-system schedules;
-- automatically rewrite a knowledge base without an approved proposal.
-
-The bundled `ai-daily` preset is a useful starting point, not a claim of complete coverage. Add or
-eject sources when your domain requires a different evidence universe.
-
-## Documentation
-
-| Guide | What it covers |
-|---|---|
-| [Configuration](docs/configuration.md) | Intent file, effective config, secrets, migrations, provider regions |
-| [Operations](docs/operations.md) | Runs, recovery, scheduling, replay, retention, backup |
-| [Connectors](docs/connectors.md) | Connector SDK, descriptors, network and acceptance contract |
-| [Threat model](docs/threat-model.md) | Trust boundaries, mitigations, and residual risks |
-| [Product experience RFC](docs/rfcs/0001-product-experience.md) | Progressive disclosure and user journey |
-| [Configuration RFC](docs/rfcs/0002-configuration.md) | Typed layered configuration design |
-| [Runtime architecture RFC](docs/rfcs/0003-architecture.md) | State machine, evidence, persistence, and concurrency |
-| [Delivery matrix](docs/implementation/complete-system-matrix.md) | Implemented system surface and acceptance evidence |
-| [Changelog](CHANGELOG.md) | Release history |
-
-## Contributing and security
-
-Focused issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
-large changes and follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately
-as described in [SECURITY.md](SECURITY.md), not in a public issue.
-
-Licensed under [Apache-2.0](LICENSE).
+Read [operations](docs/operations.md), the [threat model](docs/threat-model.md), and [security policy](SECURITY.md). Contributions are welcome under [Apache-2.0](LICENSE); see [CONTRIBUTING.md](CONTRIBUTING.md).

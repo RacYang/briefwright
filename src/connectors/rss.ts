@@ -4,6 +4,7 @@ import { XMLParser } from "fast-xml-parser";
 
 import type { SourceDefinition } from "../config/types.js";
 import { assertPublicHttpsUrl, readTextLimited } from "./http.js";
+import { retainExcerpt } from "./retention.js";
 import type { CaptureEnvelope, Connector, ConnectorContext } from "./types.js";
 
 type RssSource = SourceDefinition & {
@@ -34,7 +35,7 @@ function stripMarkup(value: string | undefined): string {
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
-  return plain.split(/\s+/u).slice(0, 25).join(" ").slice(0, 500);
+  return retainExcerpt(plain);
 }
 
 function itemUrl(item: FeedItem): string | undefined {
@@ -62,7 +63,8 @@ export class RssConnector implements Connector<RssSource> {
     const response = await context.fetch(source.connector.config.url, {
       headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml" },
     });
-    return response.ok
+    const ok = response.ok; await response.body?.cancel();
+    return ok
       ? { ok: true, detail: `${source.connector.config.url} is accessible` }
       : { ok: false, detail: `Feed returned HTTP ${response.status}` };
   }
@@ -108,6 +110,7 @@ export class RssConnector implements Connector<RssSource> {
       }
       const externalKey = item.guid ?? item.id ?? url;
       const content = `${title}\n${item.description ?? item.summary ?? ""}`;
+      const analysisText = textContentForAnalysis(item.description ?? item.summary);
       const publishedAt = item.pubDate ?? item.published ?? item.updated;
       const publishedDate = publishedAt ? new Date(publishedAt) : null;
       const normalizedPublishedAt = publishedDate && Number.isFinite(publishedDate.getTime())
@@ -122,10 +125,21 @@ export class RssConnector implements Connector<RssSource> {
         capturedAt: context.now().toISOString(),
         ...(normalizedPublishedAt ? { publishedAt: normalizedPublishedAt } : {}),
         contentHash: createHash("sha256").update(content).digest("hex"),
-        evidenceClass: "primary" as const,
+        evidenceClass: source.evidenceTier === "clue" || source.evidenceTier === "secondary" ? "secondary" as const : "primary" as const,
+        discoveryUrl: source.connector.config.url, discoveryChannel: "rss", fetchStatus: "success" as const,
+        extractStatus: "success" as const, httpStatus: response.status, attempts: 1,
+        contentType: response.headers.get("content-type") ?? "application/xml", ...(publishedAt ? { publishedRaw: publishedAt } : {}),
+        ...(response.headers.get("etag") ? { etag: response.headers.get("etag")! } : {}),
+        ...(response.headers.get("last-modified") ? { lastModified: response.headers.get("last-modified")! } : {}),
+        parserVersion: this.descriptor.version,
+        analysisText,
       }];
     });
   }
+}
+
+function textContentForAnalysis(value: string | undefined): string {
+  return (value ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim().slice(0, 20_000);
 }
 
 export function isRssSource(source: SourceDefinition): source is RssSource {

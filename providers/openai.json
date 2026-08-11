@@ -1,0 +1,11 @@
+{
+  "id": "openai",
+  "version": "1.0.0",
+  "protocol": "openai-chat-completions",
+  "model": "gpt-5-mini",
+  "baseUrl": "https://api.openai.com/v1",
+  "apiKey": { "provider": "env", "key": "OPENAI_API_KEY" },
+  "timeoutSeconds": 60,
+  "retries": 2,
+  "endpointPolicy": { "allowedHosts": ["api.openai.com"] }
+}

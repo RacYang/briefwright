@@ -23,6 +23,23 @@ export interface CaptureEnvelope {
   publishedAt?: string;
   contentHash: string;
   evidenceClass: "primary" | "secondary";
+  discoveryUrl?: string;
+  discoveryChannel?: string;
+  fetchStatus?: "success" | "failed" | "restricted" | "robots-blocked" | "isolated";
+  extractStatus?: "success" | "failed" | "not-attempted" | "isolated";
+  httpStatus?: number;
+  attempts?: number;
+  contentType?: string;
+  language?: string;
+  author?: string;
+  publishedRaw?: string;
+  eventDateRaw?: string;
+  etag?: string;
+  lastModified?: string;
+  parserVersion?: string;
+  failureReason?: string;
+  /** Untrusted source text available only for the current in-memory analysis pass. Never persist or sync. */
+  analysisText?: string;
 }
 
 export interface CheckResult {
@@ -41,4 +58,5 @@ export interface ConnectorContext {
   now(): Date;
   cursor?: Record<string, unknown>;
   setCursor?(value: Record<string, unknown>): void;
+  projectRoot?: string;
 }

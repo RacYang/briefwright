@@ -50,5 +50,5 @@ is documented in the security policy.
 - secret-pattern scan and `git diff --check`;
 - clean tarball installation and capability readback;
 - macOS, Linux, and Windows CI on supported Node versions;
-- optional maintainer Qwen live smoke test without credential output; user-owned provider access is
+- optional maintainer-selected provider live smoke test without credential output; user-owned provider access is
   validated locally with `doctor --online` and is not a release invariant.

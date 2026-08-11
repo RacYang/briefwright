@@ -8,7 +8,7 @@ export function validatePolicy(policy: PolicyDefinition): void {
   ]);
   const configured = new Set(policy.rules.map((rule) => rule.id));
   const requiredDimensions = new Set(["authority", "evidence", "relevance", "impact", "novelty", "recency", "actionability"]);
-  const requiredDomains = new Set(["foundation-models", "agents", "developer-tools", "multimodal", "safety-governance", "research", "industry-products", "china-ecosystem"]);
+  const requiredDomains = new Set(["基础", "机器学习与深度学习", "模型与生成式 AI", "数据与知识", "系统与工程", "安全与治理", "应用域", "Agent"]);
   const missing = [...requiredRules].filter((rule) => !configured.has(rule));
   const totalWeight = policy.score.dimensions.reduce((sum, dimension) => sum + dimension.weight, 0);
   const problems: string[] = [];

@@ -1,0 +1,11 @@
+{
+  "id": "anthropic",
+  "version": "1.0.0",
+  "protocol": "anthropic-messages",
+  "model": "claude-sonnet-5",
+  "baseUrl": "https://api.anthropic.com/v1",
+  "apiKey": { "provider": "env", "key": "ANTHROPIC_API_KEY" },
+  "timeoutSeconds": 60,
+  "retries": 2,
+  "endpointPolicy": { "allowedHosts": ["api.anthropic.com"] }
+}

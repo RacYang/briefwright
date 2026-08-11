@@ -20,6 +20,10 @@ export interface InitOptions {
   yes: boolean;
   name?: string;
   interests?: string[];
+  model?: BriefingIntent["model"];
+  processStore?: BriefingIntent["processStore"];
+  documentStore?: BriefingIntent["documentStore"];
+  schedule?: BriefingIntent["schedule"];
 }
 
 export async function initializeProject(options: InitOptions): Promise<string> {
@@ -63,17 +67,23 @@ export async function initializeProject(options: InitOptions): Promise<string> {
   }
 
   const intent: BriefingIntent = {
-    version: 2,
+    version: 3,
     name,
     preset: "ai-daily",
     interests,
-    schedule: "manual",
+    schedule: options.schedule ?? "manual",
     output: "markdown",
     outputDirectory: "briefs",
-    ai: "qwen",
+    model: options.model ?? detectedModel(),
+    processStore: options.processStore ?? "auto",
+    documentStore: options.documentStore ?? "auto",
   };
 
   await mkdir(root, { recursive: true });
   await writeFile(configPath, stringify(intent), { encoding: "utf8", flag: "wx" });
   return configPath;
+}
+
+function detectedModel(): string {
+  return "ollama";
 }

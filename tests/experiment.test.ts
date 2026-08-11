@@ -35,6 +35,7 @@ describe("frozen policy experiments", () => {
         store.database.prepare(`INSERT INTO item_scores(item_id,dimension,raw_score,weight,weighted_score,reason)
           SELECT ?,dimension,raw_score,weight,weighted_score,reason FROM item_scores WHERE item_id=?`).run(id, source.id);
         store.addFeedback(id, "reviewed", undefined, index === 0 ? "2026-07-27T00:00:00Z" : "2026-08-11T00:00:00Z");
+        if (index >= 3) store.addFeedback(id, "used", "Candidate retains a useful item", "2026-08-11T00:00:00Z");
       }
     } finally { store.close(); }
 
@@ -52,6 +53,7 @@ describe("frozen policy experiments", () => {
         spanDays: 15,
         baseline: { daily: 3, review: 0, machineOnly: 47 },
         candidate: { daily: 0, review: 50, machineOnly: 0 },
+        recommendation: "approve",
       },
     });
     const second = await evaluatePolicyExperiment(configPath, created.experimentId);
@@ -61,5 +63,18 @@ describe("frozen policy experiments", () => {
     expect((await loadEffectiveConfig(configPath)).policy.score.dailyThreshold).toBe(95);
     await expect(transitionPolicyExperiment(configPath, created.experimentId, "rollback")).resolves.toMatchObject({ status: "rolled-back" });
     expect((await loadEffectiveConfig(configPath)).policy.score.dailyThreshold).toBe(70);
+
+    const harmful = structuredClone(config.policy);
+    harmful.version = "1.2.0";
+    harmful.score.dailyMaximum = 50;
+    harmful.score.perDomainMaximum = 50;
+    const harmfulPath = path.join(root, "harmful-policy.json");
+    await writeFile(harmfulPath, `${JSON.stringify(harmful, null, 2)}\n`, "utf8");
+    const reopened = new SqliteStateStore(config.storage.path, config.projectRoot);
+    try { for (let index = 10; index < 50; index += 1) reopened.addFeedback(`EXP-ITEM-${String(index).padStart(2, "0")}`, "ignored", "Do not surface", "2026-08-11T01:00:00Z"); }
+    finally { reopened.close(); }
+    const harmfulExperiment = await createPolicyExperiment(configPath, harmfulPath);
+    await expect(evaluatePolicyExperiment(configPath, harmfulExperiment.experimentId)).resolves.toMatchObject({ eligible: true, metrics: { recommendation: "reject", guardrails: { passed: false } } });
+    await expect(transitionPolicyExperiment(configPath, harmfulExperiment.experimentId, "approve")).rejects.toThrow("did not demonstrate a guarded improvement");
   }, 60_000);
 });

@@ -14,7 +14,7 @@ export async function migrateConfiguration(configPath: string, write: boolean) {
   const rendered = stringify(result.intent);
   const previous = await readFile(absolute, "utf8");
   if (!result.changed || !write) {
-    return { changed: result.changed, fromVersion: result.fromVersion, toVersion: 2, written: false, preview: rendered };
+    return { changed: result.changed, fromVersion: result.fromVersion, toVersion: 3, written: false, preview: rendered };
   }
   const backupPath = `${absolute}.v${result.fromVersion}.backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await copyFile(absolute, backupPath);
@@ -26,7 +26,7 @@ export async function migrateConfiguration(configPath: string, write: boolean) {
     await rm(temporary, { force: true });
     throw error;
   }
-  return { changed: previous !== rendered, fromVersion: result.fromVersion, toVersion: 2, written: true, backupPath, preview: rendered };
+  return { changed: previous !== rendered, fromVersion: result.fromVersion, toVersion: 3, written: true, backupPath, preview: rendered };
 }
 
 export async function migrateProjectDatabase(configPath: string, write: boolean) {

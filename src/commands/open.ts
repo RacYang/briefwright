@@ -2,6 +2,8 @@ import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
 
 import { projectStatus } from "./status.js";
+import { loadEffectiveConfig } from "../config/load.js";
+import { documentStoreFor } from "../documents/filesystem.js";
 
 export async function latestArtifactPath(configPath: string): Promise<string> {
   const status = await projectStatus(configPath);
@@ -21,4 +23,8 @@ export function launchArtifact(artifactPath: string): void {
       : { file: "xdg-open", args: [artifactPath] };
   const child = spawn(command.file, command.args, { detached: true, stdio: "ignore" });
   child.unref();
+}
+
+export async function launchProjectArtifact(configPath: string, artifactPath: string): Promise<void> {
+  documentStoreFor(await loadEffectiveConfig(configPath)).open(artifactPath);
 }

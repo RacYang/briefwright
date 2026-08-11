@@ -13,11 +13,26 @@ failure section, and JSON `modelFailures` before retrying.
 so on). It retries only failed/skipped sources and pending model analyses, reusing validated cached
 analyses after a crash. It never overwrites a finalized base run or its artifacts.
 
+During migration, the collaborative process store may already contain today's terminal Run ID while
+the new local journal does not. A formal `run` pulls the full canonical snapshot first. If the remote
+run is terminal and both Daily/Review files are bound to it, Briefwright returns it as
+`alreadyComplete: true` and `remoteExisting: true` without model calls, document replacement, or
+duplicate synchronization. A non-terminal remote run, missing artifact, or mismatched Run ID fails
+closed.
+
 ## Diagnostics
 
 `doctor` performs offline schema, filesystem, secret-reference, and database checks. `doctor --online`
-also makes a minimal model call and checks each connector. It does not create a run or install a
-schedule.
+also makes a minimal model call, checks the configured process/document stores, and probes sources
+that are currently due. Individual source failures are visible warnings because partial runs are a
+supported terminal outcome; provider, contract, process-store, or document-store failures remain
+blocking. Use `doctor --online --all-sources` for an intentional full inventory audit. It can be slow
+and does not imply that every endpoint will remain reachable at run time. Doctor never creates a run,
+writes a remote record, or installs a schedule.
+
+Fixture and live previews are always written beneath `.briefwright/previews`, even when Obsidian is
+the formal document store. Only `run` publishes Daily/Review and managed indexes to the configured
+document destination.
 
 ## State and replay
 
@@ -38,3 +53,9 @@ SQLite state transactionally and restores the previous native task if recording 
 status` reports native-state drift. Config changes affect the next run; an in-progress run retains
 its frozen snapshot. Disable with `schedule disable --yes` before moving a project directory or
 executable.
+
+`schedule codex` is an export, not an installer. Its prompt binds SHA-256 digests for `briefing.yaml`,
+the exact built CLI, the packaged protocol, and an optional imported source contract. If X browser
+capture is configured, it first emits the currently due manifest and validates the resulting
+read-only bundle. A zero-source manifest requires no bundle. Any digest drift stops the task for
+review instead of silently running different code or rules.

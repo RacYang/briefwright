@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -64,6 +65,33 @@ interests: [AI agents]
 });
 
 describe("configuration integrity", () => {
+  it("binds a compatible source contract by digest and rejects later changes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-source-contract-"));
+    const configPath = path.join(root, "briefing.yaml");
+    await writeFile(configPath, "version: 3\nname: Bound\ninterests: [AI agents]\nmodel: qwen\nprocessStore: sqlite\ndocumentStore: local\n", "utf8");
+    const baseline = await loadEffectiveConfig(configPath);
+    const contractPath = path.join(root, "source-contract.json");
+    const contract = {
+      contract_id: baseline.protocol.contractId,
+      identity_contract: { active_rules: baseline.policy.rules.map((rule) => ({ rule_id: rule.id })) },
+      systems: { obsidian_root: baseline.documents.root, tables: {} },
+      obsidian_outputs: {
+        daily_path: "Inbox/AI Intelligence/Daily/YYYY-MM-DD-AI情报简报.md",
+        review_path: "Inbox/AI Intelligence/Review/YYYY-MM-DD-AI情报待复核.md",
+        forbidden_writes: [],
+      },
+      run_contract: {}, due_manifest: {}, capture_contract: {}, feedback_and_improvement: {}, completion_report: {},
+    };
+    const text = JSON.stringify(contract);
+    const digest = createHash("sha256").update(text).digest("hex");
+    await writeFile(contractPath, text, "utf8");
+    await writeFile(configPath, `version: 3\nname: Bound\ninterests: [AI agents]\nmodel: qwen\nprocessStore: sqlite\ndocumentStore: local\nsourceContract:\n  path: ${JSON.stringify(contractPath)}\n  sha256: ${digest}\n`, "utf8");
+
+    await expect(loadEffectiveConfig(configPath)).resolves.toMatchObject({ sourceContract: { path: contractPath, sha256: digest } });
+    await writeFile(contractPath, `${text}\n`, "utf8");
+    await expect(loadEffectiveConfig(configPath)).rejects.toThrow("digest does not match");
+  });
+
   it("rejects absolute and escaping output paths", () => {
     expect(() => resolveWithinRoot("/tmp/project", "/tmp/outside")).toThrow("must be relative");
     expect(() => resolveWithinRoot("/tmp/project", "../outside")).toThrow("escapes the project");

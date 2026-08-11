@@ -8,6 +8,7 @@ import { buildEffectiveConfig, loadPackagedRuntime } from "../src/config/load.js
 import type { BriefingIntent } from "../src/config/types.js";
 import { countReceipts, runOutcome } from "../src/core/accounting.js";
 import { createLiveRun } from "../src/core/live.js";
+import { SqliteStateStore } from "../src/state/sqlite.js";
 
 async function config() {
   const root = await mkdtemp(path.join(tmpdir(), "briefwright-live-"));
@@ -49,5 +50,11 @@ describe("live preview outcomes", () => {
     expect(runOutcome(counts)).toBe("failed");
     expect(result.receipts).toHaveLength(effective.preset.sources.length);
     expect(result.receipts.every((receipt) => receipt.detail === "offline")).toBe(true);
+  });
+
+  it("records a zero-due live preview as successful against its frozen due set", async () => {
+    const effective = await config(); const result = await createLiveRun(effective, new Date("2026-08-10T10:00:00Z"), async () => { throw new Error("must not fetch"); }, []);
+    const state = new SqliteStateStore(effective.storage.path, effective.projectRoot);
+    try { state.saveRun(effective, result); expect(state.latestRun()?.status).toBe("success"); } finally { state.close(); }
   });
 });

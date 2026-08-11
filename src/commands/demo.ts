@@ -15,14 +15,16 @@ export interface DemoResult {
 
 export async function runDemo(root = path.join(homedir(), ".briefwright", "demo")): Promise<DemoResult> {
   const intent: BriefingIntent = {
-    version: 2,
+    version: 3,
     name: "Briefwright demonstration",
     preset: "ai-daily",
     interests: ["AI agents", "model evaluation", "AI safety"],
     schedule: "manual",
     output: "markdown",
     outputDirectory: "briefs",
-    ai: "qwen",
+    model: "qwen",
+    processStore: "sqlite",
+    documentStore: "local",
   };
   const resources = await loadPackagedRuntime(intent);
   const config = buildEffectiveConfig(path.resolve(root), intent, resources.preset, resources.policy, resources.prompts, resources.provider);

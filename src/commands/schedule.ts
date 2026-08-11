@@ -8,6 +8,7 @@ import { runDoctor, type DoctorCheck } from "./doctor.js";
 import { scheduleDefinition, scheduleIdentifier, type SchedulerPlatform } from "../scheduler/definition.js";
 import { inspectNativeSchedule, installSchedule, uninstallSchedule } from "../scheduler/install.js";
 import { SqliteStateStore } from "../state/sqlite.js";
+import { codexAutomationDefinition } from "../scheduler/codex.js";
 
 export async function describeSchedule(configPath: string, platform = process.platform as SchedulerPlatform) {
   const absoluteConfig = path.resolve(configPath);
@@ -15,6 +16,8 @@ export async function describeSchedule(configPath: string, platform = process.pl
   if (!["darwin", "linux", "win32"].includes(platform)) throw new Error(`Unsupported scheduler platform: ${platform}`);
   return { config, definition: scheduleDefinition({ schedule: config.schedule, platform, projectRoot: config.projectRoot, configPath: absoluteConfig, executable: process.execPath, cliPath: path.resolve(process.argv[1]!) }) };
 }
+
+export async function describeCodexAutomation(configPath: string) { const absolute = path.resolve(configPath); return codexAutomationDefinition(await loadEffectiveConfig(absolute), absolute); }
 
 export async function scheduleReadiness(configPath: string, options: {
   now?: Date;
@@ -33,7 +36,7 @@ export async function scheduleReadiness(configPath: string, options: {
   const diskHash = createHash("sha256").update(await readFile(preview.path)).digest("hex");
   if (diskHash !== preview.contentHash) throw new Error("The matching live preview artifact changed on disk. Run 'briefwright preview --live' again before enabling the schedule.");
   const checks = await (options.preflight ?? ((target) => runDoctor(target, { online: true })))(path.resolve(configPath));
-  const failures = checks.filter((check) => !check.ok);
+  const failures = checks.filter((check) => !check.ok && check.blocking !== false);
   if (failures.length) throw new Error(`Online preflight failed: ${failures.map((check) => `${check.name}: ${check.detail}`).join("; ")}`);
   return { preview, checks };
 }

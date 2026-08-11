@@ -1,95 +1,80 @@
-# Briefwright complete-system delivery matrix
+# Briefwright 2.0 completion matrix
 
-- Status: Normative implementation contract
-- Baseline: AI Intelligence Daily workflow 1.3
-- Target release: 1.0.0
-- Last reviewed: 2026-08-11
+- Target: portable implementation of AI Intelligence Daily workflow 1.3
+- Reviewed: 2026-08-11
+- Release posture: implementation-complete release candidate; publishing is a separate external action
 
-This matrix defines what “complete” means for Briefwright. A row is complete only when the
-implementation, automated evidence, user-facing path, and failure behavior all exist. Design text,
-an Alpha capability flag, or a fixture-only path does not satisfy a row.
+A row is complete only when code, a user-facing path, failure behavior, and proportionate evidence
+exist. Design text or a fixture-only path is not enough. The final local suite ran every test,
+including isolated PostgreSQL 16 and MySQL 8.4 server instances; CI independently provisions
+PostgreSQL 17 and MySQL 8.4 as a merge gate.
 
-## Product boundary
-
-The default experience remains one small `briefing.yaml`. Briefwright may compile that intent into
-versioned policies, prompts, provider configuration, a frozen execution plan, and durable state, but
-ordinary users do not need to edit those resources. Expert resources are exposed only through
-`config eject` and remain schema-validated.
-
-Secrets are references, never configuration values. Knowledge-base changes are proposals until a
-person explicitly approves a bounded commit.
-
-## Completion gates
-
-| Area | Required behavior | Evidence required | Current status |
+| Area | Implemented behavior | Evidence | Status |
 |---|---|---|---|
-| First run | Offline demo, guided init, credential-aware setup, preview, actionable errors | CLI E2E on macOS/Linux/Windows; fixture golden output | Complete |
-| Versioned config | Intent migration, typed advanced resources, one precedence model, origins, redaction, semantic diff, dry-run/write migration | Schema, migration, redaction, unknown-field and downgrade tests | Complete |
-| Rules and provenance | Seven canonical policy rules; every run snapshots all active rule IDs and policy/source/prompt/provider/core versions and digests | DB assertions and artifact frontmatter tests | Complete |
-| State migrations | Explicit append-only SQLite migrations; no constructor-time implicit schema repair; migration status and backup | Fresh, upgrade, failure, and idempotency tests | Complete |
-| Run lifecycle | Frozen due manifest; initialization through completion stages; barriers; append-only events; idempotency keys; terminal success/partial/failed | State-machine and crash/retry tests | Complete |
-| Source accounting | Exactly one receipt per due source; integrity equation; accurate last scan/success/effective update | Property and integration tests | Complete |
-| Incremental capture | Durable source cursors and conditional fetch metadata; stable capture IDs; unchanged detection based on content/cursor, not time | Two-run connector tests and replay fixtures | Complete |
-| Connector contract | Typed descriptor/schema/capabilities/auth/risk/owner/examples; offline validate, online check, capture; bounded network and payload | Contract suite for every bundled connector | Complete |
-| Evidence | Canonical URL, evidence class, access/verification state, source metadata, bounded quotation and explicit unsupported claims | Validator and adversarial fixture tests | Complete |
-| AI provider | Provider-neutral interface; Qwen/DashScope adapter; typed secret ref; structured extraction; timeout/retry/rate/failure accounting; deterministic fixture provider | Provider contract, schema, redaction and failure-path tests; user-owned key validation through `doctor --online` | Complete |
-| Normalize and dedupe | Stable item identity by canonical URL plus event/version; global duplicate clusters with explainable winner | Unit, property, and multi-source integration tests | Complete |
-| Scoring | Seven weighted 0–5 dimensions; deterministic total; reasons and evidence; hard exclusions | Golden score and boundary tests | Complete |
-| Selection | Daily >=70 plus gates; Review 60–69 plus stable-knowledge potential or explicit ambiguity; otherwise MachineOnly; Daily max 12/domain max 3; empty allowed | Threshold, cap, diversity, zero-item tests | Complete |
-| Daily/Review output | Two independently valid artifacts, required sections and fields, domain coverage, exclusions, failures, receipts, timing and rule snapshots | Markdown schema/golden tests and filesystem boundary tests | Complete |
-| Formal run | Same-day scheduled identity and safe rerun/resume semantics distinct from unique previews; immutable finalized snapshots | CLI E2E and interrupted-run recovery tests | Complete |
-| Replay and audit | Offline deterministic replay from frozen inputs; verifies regenerated content and current disk artifact; explains mismatches | Tamper, version drift, missing input tests | Complete |
-| Feedback | Reviewed/used/ignored/knowledge-worth signals linked to items and runs; minimum sample gates | CLI/API persistence and invalid-reference tests | Complete |
-| Experiments | Candidate policy changes, frozen baseline/treatment, replay evaluation, approval, activation and rollback | Experiment lifecycle tests | Complete |
-| Cadence governance | Cold start, hard floors, weekly evaluation, hysteresis, human locks, explainable proposed cadence changes | Clock-controlled tests | Complete |
-| Scheduling | Dry-run describe plus confirmed install/disable/status for launchd, cron and Windows Task Scheduler; no-op schedules rejected | Adapter golden tests; platform CI smoke | Complete |
-| Knowledge integration | Propose placement/enrichment with evidence/problem/mechanism/boundaries/failures/validation; explicit preview and confirm gateway; bounded Markdown/Obsidian writes | Approval, stale-proposal, path and heading tests | Complete |
-| Doctor | Offline validation separated from online provider/connector/output checks; stable JSON and exit codes; no secrets in diagnostics | CLI E2E and redaction tests | Complete |
-| Skill | Conversational golden path invokes CLI JSON; can configure Qwen, preview, diagnose, run, recover failures, schedule, collect feedback and approve knowledge; owns no durable state | Packaged Skill inspection and scripted scenarios | Complete |
-| Security | SSRF/rebinding, redirects, payload bounds, path/symlink races, secret redaction, prompt injection boundaries, safe subprocesses and dependency audit | Threat model, adversarial tests, independent review | Complete |
-| Open-source release | Installable package includes schemas/presets/policies/prompts/skill; Node support matrix; contribution/security/community files; tags, changelog, provenance | `npm pack` install smoke, clean-clone E2E, CI matrix, GitHub release | Complete |
+| Ordinary-user start | Guided five-choice setup, review-before-write, offline fixture preview, visible next commands, no silent schedule | setup, demo, CLI E2E and package-install smoke tests | Complete |
+| Configuration | One small intent file, schema validation, explain/render/diff, explicit resource and DB migrations, typed secret references | config, migration, redaction and unknown-field tests | Complete |
+| Provider neutrality | OpenAI, Anthropic, Gemini, Qwen, Ollama, custom OpenAI-compatible endpoints, and runtime protocol registration | provider registry/contract tests; non-retryable 4xx test | Complete |
+| Process-store fallback | Omitted/auto store resolves visibly to local SQLite; configured remote failures do not silently fall back | config and doctor tests | Complete |
+| Feishu Base | `lark-cli` identity, nine standard tables, portable name discovery, idempotent provisioning, full pagination/import, stable links, two-pass upserts, dry-run doctor, partial reconciliation | fake-CLI contract tests plus authenticated read-only validation of all nine production tables | Complete |
+| PostgreSQL / MySQL | Explicit `sql provision --yes`, version gate, read-only doctor/plan, canonical JSON rows, transactional parameterized upserts | isolated local PostgreSQL 16/MySQL 8.4 contract tests plus PostgreSQL 17/MySQL 8.4 CI service containers | Complete |
+| Canonical control records | One schema for sources, runs, items, events, feedback, experiments, captures, rules, and receipts | JSON Schema validation on import and every sync | Complete |
+| Documents | Obsidian recommended, local-folder fallback, exact Daily/Review paths, managed indexes and Wiki-links, valid empty artifacts | external temporary-vault and local filesystem tests | Complete |
+| Knowledge boundary | Automatic runs cannot write evergreen notes; proposal/commit is explicit and target-hash bound | governance, stale-target and path-boundary tests | Complete |
+| Execution contract | Packaged contract, frozen digest, 14 observable stages, seven active Rule IDs, stage barriers and bounded lanes | formal-run contract/frontmatter tests | Complete |
+| Source accounting | Frozen due manifest, exactly one receipt per due source, honest update/unchanged/failed/skipped and missing equation | accounting and formal failure tests | Complete |
+| Capture ledger | Incremental cursor/hash checks, conditional HTTP metadata, success and failure capture rows, parser metadata, 25-word protected-text limit | connector, retention and failed-capture tests | Complete |
+| Security boundary | HTTPS/host allowlist, DNS-result and private-address rejection, redirect/body bounds, secret redaction, symlink/path escape prevention | adversarial connector/path tests and dependency audit | Complete |
+| Analysis/evidence | Provider-independent structured contract, validation before use, primary/secondary evidence status, source text treated as untrusted evidence | provider/evidence and formal partial-failure tests | Complete |
+| Dedupe/scoring/selection | Global stable identity, duplicate clusters, seven weighted dimensions, hard gates, Daily/Review/MachineOnly, caps and zero-item output | retry/version, selection and experiment replay tests | Complete |
+| Finalization/replay | Final outcome includes process-sync failures; SQLite and both artifacts finalize atomically and read back; immutable recovery runs; disk tamper verification | formal Lark-outage, write-transaction and replay tests | Complete |
+| Completion report | Due/receipt/stage counts, failures, domains, top items, p50/p95 source latency, capture throughput, rule/process/document validation | formal artifact and CLI JSON tests | Complete |
+| Feedback | Twelve outcome/correction types linked to stable items and runs; remote feedback imports into evaluation | feedback/governance tests and live Base import | Complete |
+| Diagnosis | At-most-weekly 30-day evaluator consumes local/imported runs, receipts and feedback plus local source/model latency, token and known/unknown-cost observations; creates non-active evidence-backed proposals | live imported-history diagnosis and unit tests | Complete |
+| Policy experiment | Frozen 14-day/50-item sample, baseline/candidate replay, positive/negative/evidence guardrails, strict improvement, human approve/activate/rollback | harmful/unchanged rejection and full lifecycle test | Complete |
+| Cadence governance | Production weights including coverage gap, cold start, weekly hysteresis, adjacent steps, priority floors, human locks and explicit decision | clock-controlled cadence test | Complete |
+| Scheduling | Codex independent-task definition freezes config and contract digests; native schedule requires untampered live preview, online doctor and confirmation | scheduler golden/guard tests | Complete |
+| Skill | Conversational entry point calls the CLI as the only authority and preserves credential/write/approval boundaries | package inspection and package smoke | Complete |
+| Open-source package | EN/ZH README, Apache-2.0/community/security files, schemas/protocol/presets/providers/docs/Skill in installable tarball | build, `npm pack` install/capabilities smoke, production audit with zero known vulnerabilities | Complete |
 
-## Canonical workflow semantics
+## Live production-parity readback
 
-Every formal run executes these observable stages in order:
+The authenticated read-only Lark exercise paginated and validated 1,552 existing records across all
+nine tables: 170 sources, 8 runs, 41 items, 337 events, 24 feedback records, 3 experiments, 238
+captures, 15 rule records, and 716 receipts. A second import after capture-contract expansion produced
+the deterministic revision `f74e1c175e0356ce3d862edb820616bc02f17e3bb28348630807bb0aef9524b3`.
+It performed no Base write. The write-path check used `record-upsert --dry-run` only.
 
-1. `initialize`
-2. `freeze_due_manifest`
-3. `discover`
-4. `capture`
-5. `write_receipts`
-6. `normalize`
-7. `verify_evidence`
-8. `deduplicate`
-9. `score`
-10. `select`
-11. `publish`
-12. `persist`
-13. `validate_integrity`
-14. `complete`
+The imported 30-day history was not inert: the evaluator read 8 runs, 716 receipts, and 24 feedback
+records and produced nine non-active repeated-source-failure proposals. No proposal, cadence,
+experiment, schedule, schema change, or knowledge write was activated.
 
-Stage-local concurrency is bounded. Stage boundaries are barriers. A formal run freezes its active
-rules, provider/prompt/policy/source versions, due sources, and configuration digests before network
-or model work. The same frozen snapshot is used for resume and replay.
+## Self-review findings and dispositions
 
-## Canonical policy identities
+1. **Hard-coded production table IDs:** removed. Defaults are portable Chinese table names; explicit
+   IDs remain supported for existing deployments.
+2. **Vendor-specific model path:** removed. Qwen is one provider preset behind the same protocol and
+   validation boundary as its peers.
+3. **Failed source represented only by a receipt:** fixed. A failed URL now also produces a capture
+   record with attempts, parser version and failure reason, without entering model analysis counts.
+4. **Copyright over-retention and analysis starvation:** fixed. Webpage, RSS, GitHub and X excerpts
+   use the same Unicode-aware 25-word limiter; a bounded full body is available only to the current
+   in-memory model pass and is stripped before SQLite, Base, snapshots, logs, or artifacts.
+5. **Process-store failure after publication:** fixed. Final artifacts are re-rendered from the final
+   store outcome; one bounded reconciliation is attempted and unresolved failures produce `partial`.
+6. **SQL doctor mutating schema:** fixed. Doctor and sync planning are read-only; schema creation is
+   an explicit confirmed command.
+7. **Cadence formula missing coverage gap:** fixed. The 0.40/0.25/0.15/0.10/0.10 production weights
+   are all present and stored as explainable components.
+8. **Documentation ahead of executable CLI:** fixed for experiment syntax, feedback vocabulary,
+   provisioning, live preview, provider/store/document choices, and self-improvement limits.
 
-- `RULE-WORKFLOW-V1.3`
-- `RULE-SCORE-V1.0`
-- `RULE-SELECTION-V1.1`
-- `RULE-SOURCE-V1.1`
-- `RULE-IMPROVEMENT-V1.0`
-- `RULE-RETENTION-V1.0`
-- `RULE-REVIEW-OUTPUT-V1.1`
+## Honest remaining external gates
 
-The bundled policy is not complete unless all seven identities are validated and included in each
-formal run snapshot.
-
-## Release decision
-
-The 1.0 release gate is conjunctive: every matrix row must be `Complete`, the supported-platform CI
-matrix must pass, the package must install and execute from a clean directory, and independent
-security and product-experience reviews must have no open release blocker. Because Briefwright is
-BYOK, a maintainer-owned Qwen credential is an optional integration smoke test rather than a release
-gate. Each installation validates its own region, workspace, model, quota, and key with
-`doctor --online` before formal runs or schedule enablement.
+- The final local verification passed all 75 tests with no skips, including real isolated
+  PostgreSQL and MySQL instances. The repository CI still provisions PostgreSQL 17 and MySQL 8.4
+  and remains the required cross-platform merge gate once the branch is published.
+- No live model call was repeated during final review. Provider request contracts were tested with
+  deterministic HTTP fixtures; every installation must pass its own `doctor --online` for the
+  selected model, region, quota and credential.
+- No Base record, external database, schedule, Git tag, release, npm package, or GitHub branch was
+  written or published during this review. Those are separate, explicit external operations.

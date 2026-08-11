@@ -16,7 +16,7 @@ export class FixtureModelProvider implements ModelProvider {
     return {
       summary: capture.summary || capture.title,
       whyItMatters: relevant ? "The source directly overlaps the configured interests." : "The source may affect the monitored AI ecosystem.",
-      domain: context.domains.includes("agents") ? "agents" : context.domains[0]!,
+      domain: context.domains.includes("Agent") ? "Agent" : context.domains[0]!,
       claims: [capture.title],
       knowledgePotential: {
         reusableQuestion: true,

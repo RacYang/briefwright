@@ -3,3 +3,13 @@ export { loadEffectiveConfig, configDigest, validateEffectiveConfig } from "./co
 export { runFormalProject } from "./core/run.js";
 export { FixtureModelProvider } from "./providers/fixture.js";
 export { QwenProvider } from "./providers/qwen.js";
+export { OpenAICompatibleProvider } from "./providers/openai-compatible.js";
+export { AnthropicMessagesProvider } from "./providers/anthropic.js";
+export { providerFor, registerModelProtocol } from "./providers/registry.js";
+export * from "./control-plane/types.js";
+export * from "./control-plane/registry.js";
+export * from "./control-plane/lark.js";
+export * from "./control-plane/sql.js";
+export * from "./documents/types.js";
+export * from "./documents/filesystem.js";
+export * from "./providers/codex.js";

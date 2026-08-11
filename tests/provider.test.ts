@@ -11,7 +11,7 @@ import { QwenProvider } from "../src/providers/qwen.js";
 
 async function context() {
   const root = await mkdtemp(path.join(tmpdir(), "briefwright-provider-"));
-  const configPath = await initializeProject({ directory: root, yes: true });
+  const configPath = await initializeProject({ directory: root, yes: true, model: "qwen" });
   await writeFile(path.join(root, ".env.local"), "DASHSCOPE_API_KEY=test-only-secret\n", { mode: 0o600 });
   const config = await loadEffectiveConfig(configPath);
   return { interests: config.interests, domains: config.policy.domains, prompt: config.prompts, provider: config.provider, projectRoot: root };
@@ -26,7 +26,7 @@ const capture: CaptureEnvelope = {
 function validAnalysis() {
   const dimension = { value: 4, reason: "Supported by the primary source." };
   return {
-    summary: capture.summary, whyItMatters: "This changes agent runtime governance.", domain: "agents",
+    summary: capture.summary, whyItMatters: "This changes agent runtime governance.", domain: "Agent",
     claims: ["Agent runtime adds tool budgets"],
     knowledgePotential: { reusableQuestion: true, mechanismIncrement: true, durableWithoutVersion: true, reason: "Reusable runtime boundary." },
     scores: { authority: dimension, evidence: dimension, relevance: dimension, impact: dimension, novelty: dimension, recency: dimension, actionability: dimension }, exclusions: [],
@@ -42,7 +42,7 @@ describe("Qwen provider contract", () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validAnalysis()) } }] }), { status: 200 });
     });
     const result = await provider.analyze(capture, await context());
-    expect(result.domain).toBe("agents");
+    expect(result.domain).toBe("Agent");
     expect(body).not.toContain("test-only-secret");
     expect(body).toContain("untrusted data");
   });

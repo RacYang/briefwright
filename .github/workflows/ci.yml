@@ -44,3 +44,30 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: pnpm run package:smoke
+
+  sql-stores:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_USER: briefwright, POSTGRES_PASSWORD: briefwright, POSTGRES_DB: briefwright }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U briefwright" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env: { MYSQL_ROOT_PASSWORD: briefwright, MYSQL_DATABASE: briefwright, MYSQL_USER: briefwright, MYSQL_PASSWORD: briefwright }
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ubriefwright -pbriefwright" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      BRIEFWRIGHT_TEST_POSTGRES_URL: postgresql://briefwright:briefwright@127.0.0.1:5432/briefwright
+      BRIEFWRIGHT_TEST_MYSQL_URL: mysql://briefwright:briefwright@127.0.0.1:3306/briefwright
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with: { version: 11.16.0 }
+      - uses: actions/setup-node@v6
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run tests/control-plane-sql.integration.test.ts

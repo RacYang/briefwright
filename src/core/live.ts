@@ -84,24 +84,26 @@ export async function createLiveRun(
   config: EffectiveConfig,
   now = new Date(),
   fetchOverride?: ConnectorContext["fetch"],
+  sources = config.preset.sources,
 ): Promise<RunResult> {
-  const fetchClient = fetchOverride ?? createHttpClient({
+  const ownedFetchClient = fetchOverride ? undefined : createHttpClient({
     timeoutSeconds: config.runtime.timeoutSeconds,
     retries: config.runtime.retries,
     allowedHosts: allowedHosts(config),
   });
-  const context: ConnectorContext = { fetch: fetchClient, now: () => now };
+  const fetchClient = fetchOverride ?? ownedFetchClient!;
+  const context: ConnectorContext = { fetch: fetchClient, now: () => now, projectRoot: config.projectRoot };
   const receipts: Receipt[] = [];
   const captures: CaptureEnvelope[] = [];
 
   let nextSource = 0;
   const workers = Array.from(
-    { length: Math.min(config.runtime.httpConcurrency, config.preset.sources.length) },
+    { length: Math.min(config.runtime.httpConcurrency, sources.length) },
     async () => {
       for (;;) {
         const index = nextSource;
         nextSource += 1;
-        const source = config.preset.sources[index];
+        const source = sources[index];
         if (!source) return;
       try {
         const connector = connectorFor(source);
@@ -123,7 +125,7 @@ export async function createLiveRun(
       }
     },
   );
-  await Promise.all(workers);
+  try { await Promise.all(workers); } finally { await ownedFetchClient?.close(); }
 
   receipts.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
   const timestamp = now.toISOString().replace(/[-:.]/g, "");
@@ -133,6 +135,7 @@ export async function createLiveRun(
     generatedAt: now.toISOString(),
     mode: "live",
     configDigest: digest,
+    dueSourceIds: sources.map((source) => source.id),
     receipts,
     daily: selectItems(captures, config, now),
     review: [],

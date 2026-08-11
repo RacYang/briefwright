@@ -259,6 +259,59 @@ export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
       CREATE INDEX IF NOT EXISTS runs_parent ON runs(parent_run_id);
     `,
   },
+  {
+    version: 7,
+    name: "governed-improvement-diagnostics",
+    sql: `
+      CREATE TABLE IF NOT EXISTS improvement_diagnoses (
+        diagnosis_id TEXT PRIMARY KEY, window_start TEXT NOT NULL, window_end TEXT NOT NULL,
+        metrics_json TEXT NOT NULL, findings_json TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS improvement_proposals (
+        proposal_id TEXT PRIMARY KEY, diagnosis_id TEXT NOT NULL REFERENCES improvement_diagnoses(diagnosis_id),
+        proposal_type TEXT NOT NULL, status TEXT NOT NULL, hypothesis TEXT NOT NULL,
+        evidence_json TEXT NOT NULL, candidate_json TEXT NOT NULL, rollback_json TEXT NOT NULL,
+        created_at TEXT NOT NULL, decided_at TEXT
+      );
+    `,
+  },
+  {
+    version: 8,
+    name: "imported-control-plane-history",
+    sql: `
+      CREATE TABLE IF NOT EXISTS remote_control_records (
+        kind TEXT NOT NULL, business_id TEXT NOT NULL, payload_json TEXT NOT NULL, links_json TEXT NOT NULL,
+        revision TEXT NOT NULL, imported_at TEXT NOT NULL,
+        PRIMARY KEY (kind, business_id)
+      );
+      CREATE INDEX IF NOT EXISTS remote_control_records_kind ON remote_control_records(kind);
+    `,
+  },
+  {
+    version: 9,
+    name: "source-performance-metrics",
+    sql: `ALTER TABLE receipts ADD COLUMN duration_ms REAL;`,
+  },
+  {
+    version: 10,
+    name: "cadence-stability-streaks",
+    sql: `
+      CREATE TABLE IF NOT EXISTS cadence_recommendation_streaks (
+        source_id TEXT PRIMARY KEY, direction TEXT NOT NULL, consecutive_cycles INTEGER NOT NULL,
+        last_evaluated_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    version: 11,
+    name: "model-performance-and-cost-observations",
+    sql: `
+      ALTER TABLE analysis_attempts ADD COLUMN duration_ms REAL;
+      ALTER TABLE analysis_attempts ADD COLUMN input_tokens INTEGER;
+      ALTER TABLE analysis_attempts ADD COLUMN output_tokens INTEGER;
+      ALTER TABLE analysis_attempts ADD COLUMN cost_usd REAL;
+    `,
+  },
 ];
 
 function checksum(migration: DatabaseMigration): string {

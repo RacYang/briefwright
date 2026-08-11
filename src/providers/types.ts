@@ -27,6 +27,7 @@ export interface AnalysisContext {
   prompt: PromptPackDefinition;
   provider: ProviderDefinition;
   projectRoot: string;
+  observeUsage?: (usage: { inputTokens?: number | undefined; outputTokens?: number | undefined; totalTokens?: number | undefined; costUsd?: number | undefined }) => void;
 }
 
 export interface ModelProvider {

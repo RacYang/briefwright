@@ -24,6 +24,20 @@
           "id": { "type": "string", "pattern": "^SRC-[A-Z0-9-]+$" },
           "title": { "type": "string", "minLength": 1 },
           "domain": { "type": "string", "minLength": 1 },
+          "enabled": { "type": "boolean" },
+          "sourceType": { "enum": ["website", "official-blog", "official-docs", "github", "x", "paper", "regulation", "media", "other"] },
+          "evidenceTier": { "enum": ["primary", "clue", "secondary"] },
+          "coverageDomains": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+          "priority": { "type": "number", "minimum": 0, "maximum": 100 },
+          "scheduleState": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "frequency": { "enum": ["daily", "weekly", "on-demand"] },
+              "lastScanAt": { "type": "string", "format": "date-time" }, "lastSuccessAt": { "type": "string", "format": "date-time" },
+              "lastEffectiveUpdateAt": { "type": "string", "format": "date-time" }, "nextScanAt": { "type": "string", "format": "date-time" },
+              "humanLocked": { "type": "boolean" }
+            }
+          },
           "cadence": {
             "type": "object",
             "additionalProperties": false,
@@ -61,6 +75,45 @@
                     "additionalProperties": false,
                     "required": ["url"],
                     "properties": { "url": { "type": "string", "format": "uri", "pattern": "^https://" } }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "config"],
+                "properties": {
+                  "type": { "const": "webpage" },
+                  "config": {
+                    "type": "object", "additionalProperties": false, "required": ["url"],
+                    "properties": { "url": { "type": "string", "format": "uri", "pattern": "^https://" } }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "config"],
+                "properties": {
+                  "type": { "const": "x-api" },
+                  "config": {
+                    "type": "object", "additionalProperties": false, "required": ["username", "bearerToken"],
+                    "properties": {
+                      "username": { "type": "string", "pattern": "^[A-Za-z0-9_]{1,15}$" },
+                      "bearerToken": { "type": "object", "additionalProperties": false, "required": ["provider", "key"], "properties": { "provider": { "enum": ["env", "file"] }, "key": { "type": "string", "minLength": 1 } } }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "config"],
+                "properties": {
+                  "type": { "const": "codex-browser" },
+                  "config": {
+                    "type": "object", "additionalProperties": false, "required": ["username"],
+                    "properties": { "username": { "type": "string", "pattern": "^[A-Za-z0-9_]{1,15}$" } }
                   }
                 }
               },

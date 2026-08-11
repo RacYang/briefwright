@@ -1,0 +1,11 @@
+{
+  "id": "codex",
+  "version": "1.0.0",
+  "protocol": "codex-exec",
+  "model": "gpt-5.6-sol",
+  "reasoningEffort": "high",
+  "baseUrl": "https://codex.local",
+  "timeoutSeconds": 180,
+  "retries": 1,
+  "endpointPolicy": { "allowedHosts": ["codex.local"] }
+}

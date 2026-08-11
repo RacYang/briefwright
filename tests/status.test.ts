@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -59,7 +59,8 @@ describe("project status", () => {
     const outputRoot = await mkdtemp(path.join(tmpdir(), "briefwright-output-link-"));
     const outsideOutput = await mkdtemp(path.join(tmpdir(), "briefwright-outside-output-"));
     const outputConfig = await initializeProject({ directory: outputRoot, yes: true });
-    await symlink(outsideOutput, path.join(outputRoot, "briefs"));
+    await mkdir(path.join(outputRoot, ".briefwright"));
+    await symlink(outsideOutput, path.join(outputRoot, ".briefwright", "previews"));
     await expect(previewProject(outputConfig)).rejects.toThrow("symlink");
     await expect(readdir(outsideOutput)).resolves.toEqual([]);
   });

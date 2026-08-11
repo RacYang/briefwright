@@ -10,7 +10,7 @@
     {
       "id": "SRC-QWEN-CODE-RELEASES",
       "title": "Qwen Code releases",
-      "domain": "developer-tools",
+      "domain": "系统与工程",
       "cadence": { "minimumHours": 6, "defaultHours": 24, "maximumHours": 168 },
       "connector": {
         "type": "github-releases",
@@ -22,7 +22,7 @@
     {
       "id": "SRC-ARXIV-CS-AI",
       "title": "arXiv Computer Science - Artificial Intelligence",
-      "domain": "research",
+      "domain": "机器学习与深度学习",
       "cadence": { "minimumHours": 6, "defaultHours": 24, "maximumHours": 168 },
       "connector": {
         "type": "rss",
@@ -34,42 +34,42 @@
     {
       "id": "SRC-HUGGINGFACE-TRANSFORMERS",
       "title": "Hugging Face Transformers releases",
-      "domain": "foundation-models",
+      "domain": "模型与生成式 AI",
       "cadence": { "minimumHours": 6, "defaultHours": 24, "maximumHours": 168 },
       "connector": { "type": "github-releases", "config": { "repository": "huggingface/transformers" } }
     },
     {
       "id": "SRC-LANGGRAPH-RELEASES",
       "title": "LangGraph releases",
-      "domain": "agents",
+      "domain": "Agent",
       "cadence": { "minimumHours": 6, "defaultHours": 24, "maximumHours": 168 },
       "connector": { "type": "github-releases", "config": { "repository": "langchain-ai/langgraph" } }
     },
     {
       "id": "SRC-COMFYUI-RELEASES",
       "title": "ComfyUI releases",
-      "domain": "multimodal",
+      "domain": "应用域",
       "cadence": { "minimumHours": 6, "defaultHours": 24, "maximumHours": 168 },
       "connector": { "type": "github-releases", "config": { "repository": "Comfy-Org/ComfyUI" } }
     },
     {
       "id": "SRC-ARXIV-CS-CY",
       "title": "arXiv Computers and Society",
-      "domain": "safety-governance",
+      "domain": "安全与治理",
       "cadence": { "minimumHours": 12, "defaultHours": 24, "maximumHours": 168 },
       "connector": { "type": "rss", "config": { "url": "https://export.arxiv.org/rss/cs.CY" } }
     },
     {
       "id": "SRC-OLLAMA-RELEASES",
       "title": "Ollama releases",
-      "domain": "industry-products",
+      "domain": "应用域",
       "cadence": { "minimumHours": 6, "defaultHours": 24, "maximumHours": 168 },
       "connector": { "type": "github-releases", "config": { "repository": "ollama/ollama" } }
     },
     {
       "id": "SRC-PADDLE-RELEASES",
       "title": "PaddlePaddle releases",
-      "domain": "china-ecosystem",
+      "domain": "基础",
       "cadence": { "minimumHours": 12, "defaultHours": 24, "maximumHours": 168 },
       "connector": { "type": "github-releases", "config": { "repository": "PaddlePaddle/Paddle" } }
     }

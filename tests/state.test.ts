@@ -48,4 +48,18 @@ describe("SQLite state", () => {
       store.close();
     }
   });
+
+  it("never persists the transient full-text analysis payload", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-transient-"));
+    const intent: BriefingIntent = { version: 2, name: "Retention", preset: "ai-daily", interests: ["AI"], schedule: "manual", output: "markdown", outputDirectory: "briefs", ai: "qwen" };
+    const resources = await loadPackagedRuntime(intent); const config = buildEffectiveConfig(root, intent, resources.preset, resources.policy, resources.prompts, resources.provider);
+    const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"), root); const runId = "RUN-20260811-DAILY"; const now = "2026-08-11T00:00:00Z";
+    try {
+      store.beginFormalRun(config, runId, now, { rules: config.policy.rules });
+      store.recordSourceResult(runId, { sourceId: "SRC", result: "updated" }, [{ sourceId: "SRC", externalKey: "1", canonicalUrl: "https://example.com/1", title: "Title", summary: "bounded excerpt", capturedAt: now, contentHash: "hash", evidenceClass: "primary", analysisText: "FULL TEXT MUST REMAIN TRANSIENT" }], {}, now);
+      const row = store.database.prepare("SELECT raw_json FROM captures").get() as { raw_json: string };
+      expect(row.raw_json).not.toContain("FULL TEXT MUST REMAIN TRANSIENT");
+      expect(row.raw_json).not.toContain("analysisText");
+    } finally { store.close(); }
+  });
 });

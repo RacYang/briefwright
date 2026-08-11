@@ -8,18 +8,23 @@ import { diffConfiguration, ejectConfiguration, explainConfiguration, renderConf
 import { decideProjectCadence, evaluateProjectCadence, listCadenceProposals, lockSourceCadence } from "./commands/cadence.js";
 import { runDemo } from "./commands/demo.js";
 import { runDoctor } from "./commands/doctor.js";
-import { addProjectFeedback, projectFeedbackSummary } from "./commands/feedback.js";
+import { addProjectFeedback, projectFeedbackSummary, FEEDBACK_TYPES } from "./commands/feedback.js";
 import { initializeProject } from "./commands/init.js";
+import { setupProject } from "./commands/setup.js";
+import { importContract, importLarkSnapshot, provisionLarkProject, syncProject } from "./commands/import-sync.js";
+import { diagnoseProject, listImprovementProposals } from "./commands/improve.js";
 import { commitKnowledge, proposeKnowledge } from "./commands/knowledge.js";
 import { createPolicyExperiment, evaluatePolicyExperiment, transitionPolicyExperiment } from "./commands/experiment.js";
 import { migrateConfiguration, migrateProjectDatabase } from "./commands/migrate.js";
-import { latestArtifactPath, launchArtifact } from "./commands/open.js";
+import { latestArtifactPath, launchProjectArtifact } from "./commands/open.js";
 import { previewProject } from "./commands/preview.js";
 import { verifyReplay } from "./commands/replay.js";
 import { projectStatus } from "./commands/status.js";
-import { describeSchedule, disableProjectSchedule, enableSchedule, scheduleStatus } from "./commands/schedule.js";
+import { describeSchedule, describeCodexAutomation, disableProjectSchedule, enableSchedule, scheduleStatus } from "./commands/schedule.js";
 import { runFormalProject } from "./core/run.js";
 import { ConfigurationError } from "./config/load.js";
+import { provisionSqlProject } from "./commands/sql.js";
+import { externalCaptureManifest, validateExternalCaptureFile } from "./commands/capture.js";
 
 const program = new Command();
 const jsonRequested = process.argv.includes("--json");
@@ -35,7 +40,7 @@ function writeJson(value: unknown): void {
 program
   .name("briefwright")
   .description("Source-linked, auditable intelligence briefings without the setup wall.")
-  .version("1.0.0")
+  .version("2.0.0")
   .option("--json", "emit bounded machine-readable output", false);
 
 if (jsonRequested) program.exitOverride();
@@ -44,6 +49,30 @@ program.configureOutput({
     if (!jsonRequested) process.stderr.write(message);
   },
 });
+
+program.command("setup")
+  .description("Guided setup for model, process store, document destination, and schedule.")
+  .option("-d, --directory <path>", "project directory", process.cwd())
+  .option("-y, --yes", "use supplied options without prompts", false)
+  .option("--name <name>", "briefing name")
+  .option("--interest <topic...>", "topics to watch")
+  .option("--model <provider>", "codex, openai, anthropic, gemini, qwen, ollama, or a packaged provider")
+  .option("--process-store <driver>", "lark, postgres, mysql, or sqlite")
+  .option("--lark-base <token>", "Feishu Base app token used by lark-cli")
+  .option("--connection-env <name>", "environment variable containing a PostgreSQL/MySQL connection URL")
+  .option("--document-store <driver>", "obsidian or local")
+  .option("--document-root <path>", "Obsidian vault root")
+  .option("--schedule <schedule>", "manual, daily-at-10, or weekdays-at-09")
+  .action(async (options: { directory: string; yes: boolean; name?: string; interest?: string[]; model?: string; processStore?: "lark" | "postgres" | "mysql" | "sqlite"; larkBase?: string; connectionEnv?: string; documentStore?: "obsidian" | "local"; documentRoot?: string; schedule?: "manual" | "daily-at-10" | "weekdays-at-09" }) => {
+    const result = await setupProject({ directory: options.directory, yes: options.yes || isJsonOutput(),
+      ...(options.name ? { name: options.name } : {}), ...(options.interest ? { interests: options.interest } : {}), ...(options.model ? { model: options.model } : {}),
+      ...(options.processStore ? { processStore: options.processStore } : {}), ...(options.larkBase ? { larkBase: options.larkBase } : {}),
+      ...(options.connectionEnv ? { connectionEnv: options.connectionEnv } : {}), ...(options.documentStore ? { documentStore: options.documentStore } : {}),
+      ...(options.documentRoot ? { documentRoot: options.documentRoot } : {}), ...(options.schedule ? { schedule: options.schedule } : {}) });
+    if (isJsonOutput()) return writeJson({ ok: true, command: "setup", ...result });
+    console.log(`Created ${result.configPath}`); console.log(`Model: ${result.choices.model}`); console.log(`Process data: ${result.choices.processStore}`); console.log(`Documents: ${result.choices.documentStore}`);
+    console.log("\nNext:"); for (const next of result.next) console.log(`  ${next}`);
+  });
 
 program
   .command("demo")
@@ -120,8 +149,9 @@ program
   .description("Execute the formal incremental briefing pipeline with the configured AI provider.")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .option("--retry-failed", "create or resume an immutable recovery run for the latest failed operations", false)
-  .action(async ({ config, retryFailed }: { config: string; retryFailed: boolean }) => {
-    const result = await runFormalProject(config, { retryFailed });
+  .option("--capture-bundle <path>", "validated browser capture bundle for configured external sources")
+  .action(async ({ config, retryFailed, captureBundle }: { config: string; retryFailed: boolean; captureBundle?: string }) => {
+    const result = await runFormalProject(config, { retryFailed, ...(captureBundle ? { captureBundlePath: captureBundle } : {}) });
     if (isJsonOutput()) {
       writeJson({
         ok: result.outcome !== "failed",
@@ -130,6 +160,7 @@ program
         outcome: result.outcome,
         resumed: result.resumed,
         alreadyComplete: result.alreadyComplete,
+        remoteExisting: result.remoteExisting ?? false,
         dailyPath: result.dailyPath,
         reviewPath: result.reviewPath,
         counts: result.result.receipts.reduce((counts, receipt) => ({ ...counts, [receipt.result]: (counts[receipt.result] ?? 0) + 1 }), {} as Record<string, number>),
@@ -140,6 +171,8 @@ program
         stageTimings: result.result.stageTimings,
         integrityValidated: result.result.integrityValidated,
         cadenceGovernance: result.result.cadenceGovernance,
+        controlPlaneSync: result.result.controlPlaneSync,
+        completionReport: result.result.completionReport,
       });
       if (result.outcome === "failed") process.exitCode = 1;
       return;
@@ -151,6 +184,12 @@ program
     for (const failure of result.result.modelFailures ?? []) console.log(`MODEL FAILED ${failure.sourceId}: ${failure.detail}`);
     if (result.outcome === "failed") process.exitCode = 1;
   });
+
+const captureCommand = program.command("capture").description("Prepare and validate read-only external browser capture bundles.");
+captureCommand.command("manifest").option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => { const manifest = await externalCaptureManifest(config); if (isJsonOutput()) return writeJson({ ok: true, command: "capture manifest", ...manifest }); console.log(JSON.stringify(manifest, null, 2)); });
+captureCommand.command("validate").argument("<bundle>").option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (bundle: string, { config }: { config: string }) => { const result = await validateExternalCaptureFile(config, bundle); if (isJsonOutput()) return writeJson({ ok: true, command: "capture validate", ...result }); console.log(JSON.stringify(result, null, 2)); });
 
 const configCommand = program.command("config").description("Validate and explain compiled configuration.");
 
@@ -238,19 +277,68 @@ dbCommand
     if ("backupPath" in result && result.backupPath) console.log(`Backup: ${result.backupPath}`);
   });
 
+const importCommand = program.command("import").description("Read an existing control plane or execution contract into a versioned local snapshot.");
+importCommand.command("lark")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => { const result = await importLarkSnapshot(config); if (isJsonOutput()) return writeJson({ ok: true, command: "import lark", ...result }); console.log(`Imported ${result.sourceCount} sources and ${result.ruleCount} rules to ${result.outputPath}`); });
+importCommand.command("contract")
+  .argument("<path>")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (contractPath: string, { config }: { config: string }) => { const result = await importContract(config, contractPath); if (isJsonOutput()) return writeJson({ ok: true, command: "import contract", ...result }); console.log(`Imported contract ${result.contentDigest} to ${result.outputPath}`); });
+
+const larkCommand = program.command("lark").description("Provision or inspect the recommended Feishu Base control plane through lark-cli.");
+larkCommand.command("provision")
+  .description("Idempotently create missing standard tables and fields; never deletes or renames data.")
+  .requiredOption("--yes", "confirm external Base schema writes")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await provisionLarkProject(config);
+    if (isJsonOutput()) return writeJson({ ok: result.ready, command: "lark provision", ...result });
+    console.log(`Lark Base ${result.ready ? "is ready" : "needs attention"}.`);
+    console.log(`Created tables: ${result.createdTables.join(", ") || "none"}`);
+    console.log(`Created fields: ${result.createdFields.join(", ") || "none"}`);
+    for (const check of result.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`);
+    if (!result.ready) process.exitCode = 1;
+  });
+
+const sqlCommand = program.command("sql").description("Provision the canonical PostgreSQL or MySQL process-store schema.");
+sqlCommand.command("provision")
+  .description("Create the versioned canonical tables in an explicitly configured SQL database.")
+  .requiredOption("--yes", "confirm external database schema writes")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await provisionSqlProject(config);
+    if (isJsonOutput()) return writeJson({ ok: result.ready, command: "sql provision", ...result });
+    console.log(`${result.driver} process store ${result.ready ? "is ready" : "needs attention"}.`);
+    for (const check of result.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`);
+    if (!result.ready) process.exitCode = 1;
+  });
+
+const syncCommand = program.command("sync").description("Plan or explicitly apply local process records to the configured process store.");
+syncCommand.command("plan").option("-c, --config <path>", "intent configuration", "briefing.yaml").option("--run <id>")
+  .action(async ({ config, run }: { config: string; run?: string }) => { const result = await syncProject(config, false, false, run); if (isJsonOutput()) return writeJson({ ok: true, command: "sync plan", ...result }); console.log(JSON.stringify(result, null, 2)); });
+syncCommand.command("apply").requiredOption("--yes", "confirm external process-store writes").option("-c, --config <path>", "intent configuration", "briefing.yaml").option("--run <id>")
+  .action(async ({ config, run }: { config: string; run?: string }) => { const result = await syncProject(config, true, true, run); if (isJsonOutput()) return writeJson({ ok: true, command: "sync apply", ...result }); console.log(JSON.stringify(result, null, 2)); });
+
 const feedbackCommand = program.command("feedback").description("Record human outcome signals without changing policy automatically.");
 feedbackCommand.command("add")
   .argument("<item-id>")
-  .requiredOption("--type <type>", "reviewed, used, ignored, or knowledge-worthy")
+  .requiredOption("--type <type>", FEEDBACK_TYPES.join(", "))
   .option("--note <text>")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .action(async (itemId: string, options: { type: string; note?: string; config: string }) => {
-    const allowed = ["reviewed", "used", "ignored", "knowledge-worthy"] as const;
+    const allowed = FEEDBACK_TYPES;
     if (!allowed.includes(options.type as typeof allowed[number])) throw new Error(`Unknown feedback type: ${options.type}`);
     const result = await addProjectFeedback(options.config, itemId, options.type as typeof allowed[number], options.note);
     if (isJsonOutput()) return writeJson({ ok: true, command: "feedback add", itemId, type: options.type, ...result });
     console.log(`Recorded ${options.type} feedback for ${itemId}: ${result.feedbackId}`);
   });
+
+const improveCommand = program.command("improve").description("Diagnose durable signals and create non-active, human-governed improvement proposals.");
+improveCommand.command("diagnose").option("-c, --config <path>", "intent configuration", "briefing.yaml").option("--window <days>", "analysis window", "30")
+  .action(async ({ config, window }: { config: string; window: string }) => { const result = await diagnoseProject(config, Number(window)); if (isJsonOutput()) return writeJson({ ok: true, command: "improve diagnose", automaticActivation: false, ...result }); console.log(JSON.stringify(result, null, 2)); console.log("No proposal was activated. Review evidence and create a frozen experiment before approval."); });
+improveCommand.command("list").option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => { const proposals = await listImprovementProposals(config); if (isJsonOutput()) return writeJson({ ok: true, command: "improve list", proposals }); console.log(JSON.stringify(proposals, null, 2)); });
 feedbackCommand.command("summary")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .action(async ({ config }: { config: string }) => {
@@ -315,6 +403,10 @@ knowledgeCommand.command("commit")
   });
 
 const scheduleCommand = program.command("schedule").description("Describe or explicitly manage a native user schedule.");
+scheduleCommand.command("codex")
+  .description("Export a Codex Desktop independent-task automation definition without installing it.")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => { const definition = await describeCodexAutomation(config); if (isJsonOutput()) return writeJson({ ok: true, command: "schedule codex", installed: false, definition }); console.log(JSON.stringify(definition, null, 2)); console.log("Nothing was installed. Review this definition, then create the automation in Codex Desktop."); });
 scheduleCommand.command("describe")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .option("--platform <platform>", "darwin, linux, or win32")
@@ -398,17 +490,19 @@ program
   .description("Check configuration and the local runtime environment.")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .option("--online", "also call the configured provider and source endpoints", false)
-  .action(async ({ config, online }: { config: string; online: boolean }) => {
-    const checks = await runDoctor(config, { online });
+  .option("--all-sources", "with --online, probe every enabled source instead of only sources currently due", false)
+  .action(async ({ config, online, allSources }: { config: string; online: boolean; allSources: boolean }) => {
+    const checks = await runDoctor(config, { online, allSources });
+    const blockingFailures = checks.filter((check) => !check.ok && check.blocking !== false);
     if (isJsonOutput()) {
-      writeJson({ ok: checks.every((check) => check.ok), command: "doctor", checks });
-      if (checks.some((check) => !check.ok)) process.exitCode = 1;
+      writeJson({ ok: blockingFailures.length === 0, command: "doctor", checks });
+      if (blockingFailures.length) process.exitCode = 1;
       return;
     }
     for (const check of checks) {
-      console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`);
+      console.log(`${check.ok ? "PASS" : check.blocking === false ? "WARN" : "FAIL"} ${check.name}: ${check.detail}`);
     }
-    if (checks.some((check) => !check.ok)) process.exitCode = 1;
+    if (blockingFailures.length) process.exitCode = 1;
   });
 
 program
@@ -464,7 +558,7 @@ program
       writeJson({ ok: true, command: "open", launched: false, artifactPath });
       return;
     }
-    if (!print) launchArtifact(artifactPath);
+    if (!print) await launchProjectArtifact(config, artifactPath);
     console.log(artifactPath);
   });
 
@@ -473,10 +567,12 @@ program
   .description("Describe the installed CLI surface and safety-relevant feature state.")
   .action(() => {
     const capabilities = {
-      version: "1.0.0",
-      commands: ["demo", "init", "preview", "run", "replay", "status", "open", "doctor", "config", "db", "schedule", "enable", "feedback", "experiment", "cadence", "knowledge", "capabilities"],
-      connectors: ["rss", "github-releases"],
-      providers: ["qwen", "fixture"],
+      version: "2.0.0",
+      commands: ["demo", "setup", "init", "preview", "run", "capture", "replay", "status", "open", "doctor", "import", "lark", "sql", "sync", "config", "db", "schedule", "enable", "feedback", "improve", "experiment", "cadence", "knowledge", "capabilities"],
+      connectors: ["rss", "github-releases", "webpage", "x-api", "codex-browser", "extension-sdk"],
+      providers: ["codex", "openai", "anthropic", "gemini", "qwen", "ollama", "custom-openai-compatible", "custom-protocol", "fixture"],
+      processStores: ["lark-cli", "postgres", "mysql", "sqlite-fallback"],
+      documentStores: ["obsidian", "local-folder-fallback"],
       presets: ["ai-daily"],
       fixturePreview: true,
       livePreview: true,
@@ -486,7 +582,9 @@ program
       replayAllArtifacts: true,
       feedbackExperiments: true,
       scheduling: true,
-      externalDestinations: false,
+      controlPlaneSync: true,
+      governedImprovement: true,
+      externalDestinations: true,
       knowledgeWrites: true,
     };
     if (isJsonOutput()) {

@@ -1,0 +1,13 @@
+{
+  "id": "ollama",
+  "version": "1.0.0",
+  "protocol": "openai-chat-completions",
+  "model": "qwen3:8b",
+  "baseUrl": "http://127.0.0.1:11434/v1",
+  "timeoutSeconds": 120,
+  "retries": 1,
+  "endpointPolicy": {
+    "allowedHosts": ["127.0.0.1", "localhost", "[::1]"],
+    "allowInsecureLocalhost": true
+  }
+}

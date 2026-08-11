@@ -23,7 +23,7 @@ function capture(index: number): CaptureEnvelope {
 
 function analysis(value: number, knowledge = true): ModelAnalysis {
   const dimension = { value, reason: "Bounded fixture reason" };
-  return { summary: "Agent mechanism adds evidence checkpoint", whyItMatters: "Affects an agent decision", domain: "agents", claims: ["Agent mechanism"], knowledgePotential: { reusableQuestion: knowledge, mechanismIncrement: knowledge, durableWithoutVersion: knowledge, reason: "Reusable mechanism" }, scores: { authority: dimension, evidence: dimension, relevance: dimension, impact: dimension, novelty: dimension, recency: dimension, actionability: dimension }, exclusions: [] };
+  return { summary: "Agent mechanism adds evidence checkpoint", whyItMatters: "Affects an agent decision", domain: "Agent", claims: ["Agent mechanism"], knowledgePotential: { reusableQuestion: knowledge, mechanismIncrement: knowledge, durableWithoutVersion: knowledge, reason: "Reusable mechanism" }, scores: { authority: dimension, evidence: dimension, relevance: dimension, impact: dimension, novelty: dimension, recency: dimension, actionability: dimension }, exclusions: [] };
 }
 
 describe("deterministic selection policy", () => {

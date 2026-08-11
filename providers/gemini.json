@@ -1,0 +1,11 @@
+{
+  "id": "gemini",
+  "version": "1.0.0",
+  "protocol": "openai-chat-completions",
+  "model": "gemini-3.6-flash",
+  "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "apiKey": { "provider": "env", "key": "GEMINI_API_KEY" },
+  "timeoutSeconds": 60,
+  "retries": 2,
+  "endpointPolicy": { "allowedHosts": ["generativelanguage.googleapis.com"] }
+}

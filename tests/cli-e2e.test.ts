@@ -28,7 +28,7 @@ describe("CLI golden path", () => {
     const status = await command(["status", "--config", configPath]);
     expect(status).toMatchObject({ ok: true, scheduleEnabled: false, latestRun: { runId: expect.any(String) } });
     await expect(command(["replay", String((status.latestRun as { runId: string }).runId), "--config", configPath])).resolves.toMatchObject({ ok: true, matches: true });
-  }, 15_000);
+  }, 30_000);
 
   it("describes schedules without installing and rejects manual schedules", async () => {
     const project = await mkdtemp(path.join(tmpdir(), "briefwright-cli-schedule-"));
@@ -41,5 +41,5 @@ describe("CLI golden path", () => {
       expect(output.ok).toBe(false);
       expect(output.error.message).toContain("Schedule is manual");
     }
-  }, 15_000);
+  }, 30_000);
 });

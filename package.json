@@ -1,6 +1,6 @@
 {
   "name": "briefwright",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Auditable, human-in-the-loop intelligence briefings from sources to knowledge.",
   "type": "module",
   "types": "./dist/index.d.ts",
@@ -8,8 +8,14 @@
     "briefwright": "./dist/cli.js"
   },
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./connector-sdk": { "types": "./dist/connector-sdk.d.ts", "import": "./dist/connector-sdk.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./connector-sdk": {
+      "types": "./dist/connector-sdk.d.ts",
+      "import": "./dist/connector-sdk.js"
+    }
   },
   "files": [
     "dist",
@@ -17,6 +23,7 @@
     "policies",
     "prompts",
     "providers",
+    "protocol",
     "schemas",
     "templates",
     "skill",
@@ -59,11 +66,14 @@
     "commander": "^14.0.0",
     "fast-xml-parser": "^5.10.1",
     "ipaddr.js": "^2.5.0",
+    "mysql2": "^3.23.2",
+    "pg": "^8.23.0",
     "undici": "^8.10.0",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
+    "@types/pg": "^8.21.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"

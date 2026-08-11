@@ -17,7 +17,7 @@ jobs:
         node: [22, 24]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11.16.0
@@ -33,7 +33,7 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11.16.0
@@ -64,7 +64,7 @@ jobs:
       BRIEFWRIGHT_TEST_POSTGRES_URL: postgresql://briefwright:briefwright@127.0.0.1:5432/briefwright
       BRIEFWRIGHT_TEST_MYSQL_URL: mysql://briefwright:briefwright@127.0.0.1:3306/briefwright
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with: { version: 11.16.0 }
       - uses: actions/setup-node@v6

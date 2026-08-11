@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.1 - 2026-08-11
+
+- replace the process-heavy project introduction with a concise product-first README covering the
+  value proposition, installation, first successful run, supported stack, workflow, and stable
+  documentation entry points;
+- keep English and Simplified Chinese in one README with same-page language navigation, while
+  retaining the former Chinese filename as a compatibility pointer.
+
 ## 2.1.0 - 2026-08-11
 
 - make the conversational Skill the ordinary-user product surface, with one-question-at-a-time

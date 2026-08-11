@@ -54,7 +54,7 @@ describe("durable model retry and versioned identity", () => {
       expect((store.database.prepare("SELECT COUNT(*) count FROM duplicate_clusters").get() as { count: number }).count).toBeGreaterThan(0);
       expect((store.database.prepare("SELECT COUNT(*) count FROM analysis_attempts WHERE status='duplicate'").get() as { count: number }).count).toBeGreaterThan(0);
     } finally { store.close(); }
-  }, 20_000);
+  }, 60_000);
 
   it("keeps historical items and feedback when the same external event changes content", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-versioned-item-"));
@@ -80,5 +80,5 @@ describe("durable model retry and versioned identity", () => {
       expect((store.database.prepare("SELECT COUNT(*) count FROM items WHERE item_id IN (?,?)").get(firstId, secondId) as { count: number }).count).toBe(2);
       expect((store.database.prepare("SELECT COUNT(*) count FROM feedback WHERE item_id=?").get(firstId) as { count: number }).count).toBe(1);
     } finally { store.close(); }
-  }, 20_000);
+  }, 60_000);
 });

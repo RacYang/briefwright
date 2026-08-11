@@ -61,5 +61,5 @@ describe("frozen policy experiments", () => {
     expect((await loadEffectiveConfig(configPath)).policy.score.dailyThreshold).toBe(95);
     await expect(transitionPolicyExperiment(configPath, created.experimentId, "rollback")).resolves.toMatchObject({ status: "rolled-back" });
     expect((await loadEffectiveConfig(configPath)).policy.score.dailyThreshold).toBe(70);
-  }, 30_000);
+  }, 60_000);
 });

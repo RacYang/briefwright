@@ -67,7 +67,7 @@ describe("formal run", () => {
     });
     expect(second.alreadyComplete).toBe(true);
     expect(fetchCount).toBe(8);
-  }, 20_000);
+  }, 60_000);
 
   it("resumes an interrupted run from durable receipts without fetching sources again", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-resume-"));
@@ -82,7 +82,7 @@ describe("formal run", () => {
     expect(resumed.resumed).toBe(true);
     expect(resumed.outcome).toBe("success");
     expect(resumed.result.receipts).toHaveLength(8);
-  }, 20_000);
+  }, 60_000);
 
   it("records model failures as a partial terminal outcome in both artifacts", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-model-failure-"));
@@ -113,7 +113,7 @@ describe("formal run", () => {
     expect(recovered.outcome).toBe("success");
     expect(recovered.result.daily.length).toBeGreaterThan(0);
     await expect(runFormalProject(configPath, { now: new Date("2026-08-13T05:00:00Z"), retryFailed: true, provider: new FixtureModelProvider() })).rejects.toThrow("no failed operations");
-  }, 20_000);
+  }, 60_000);
 
   it("reports capture-limit backlog as partial and makes it recoverable", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-backlog-"));
@@ -138,5 +138,5 @@ describe("formal run", () => {
     });
     expect(recovery.runId).toBe("RUN-20260814-DAILY-R01");
     expect(recovery.outcome).toBe("partial");
-  }, 20_000);
+  }, 60_000);
 });

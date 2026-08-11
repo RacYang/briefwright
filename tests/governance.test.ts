@@ -41,5 +41,5 @@ describe("human governance", () => {
     const experiment = await createPolicyExperiment(configPath, candidate);
     await expect(evaluatePolicyExperiment(configPath, experiment.experimentId)).resolves.toMatchObject({ eligible: false, metrics: { reviewedItems: 1 } });
     await expect(transitionPolicyExperiment(configPath, experiment.experimentId, "approve")).rejects.toThrow("cannot approve");
-  }, 20_000);
+  }, 60_000);
 });

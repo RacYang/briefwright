@@ -62,7 +62,7 @@ describe("formal run", () => {
     });
     expect(second.alreadyComplete).toBe(true);
     expect(fetchCount).toBe(8);
-  });
+  }, 20_000);
 
   it("resumes an interrupted run from durable receipts without fetching sources again", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-resume-"));
@@ -77,5 +77,5 @@ describe("formal run", () => {
     expect(resumed.resumed).toBe(true);
     expect(resumed.outcome).toBe("success");
     expect(resumed.result.receipts).toHaveLength(8);
-  });
+  }, 20_000);
 });

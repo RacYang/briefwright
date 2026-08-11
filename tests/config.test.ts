@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -12,6 +12,7 @@ import {
   parseIntent,
 } from "../src/config/load.js";
 import { resolveWithinRoot } from "../src/config/paths.js";
+import { resolveSecret } from "../src/config/secrets.js";
 
 async function temporaryProject(config: string): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "briefwright-config-"));
@@ -78,5 +79,18 @@ interests: [AI agents]
     const config = await loadEffectiveConfig(configPath);
     expect(configDigest(config)).toMatch(/^[a-f0-9]{64}$/);
   });
-});
 
+  it("refuses configuration and secret reads through project symlinks", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-read-boundary-"));
+    const outside = await mkdtemp(path.join(tmpdir(), "briefwright-read-outside-"));
+    const outsideConfig = path.join(outside, "briefing.yaml");
+    await writeFile(outsideConfig, "version: 2\nname: Outside\ninterests: [AI agents]\n", "utf8");
+    const linkedConfig = path.join(root, "briefing.yaml");
+    await symlink(outsideConfig, linkedConfig);
+    await expect(loadEffectiveConfig(linkedConfig)).rejects.toThrow("symlink");
+
+    await writeFile(path.join(outside, "secret"), "do-not-follow", "utf8");
+    await symlink(path.join(outside, "secret"), path.join(root, "secret"));
+    await expect(resolveSecret({ provider: "file", key: "secret" }, root)).rejects.toThrow("symlink");
+  });
+});

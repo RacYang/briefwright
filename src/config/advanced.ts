@@ -10,7 +10,7 @@ import { parse, stringify } from "yaml";
 import type { EffectiveConfig, PolicyDefinition, PromptPackDefinition, ProviderDefinition, SourceDefinition } from "./types.js";
 import { ConfigurationError } from "./errors.js";
 import { validatePolicy } from "./policy.js";
-import { resolveWithinRoot } from "./paths.js";
+import { assertSafeReadPath, resolveWithinRoot } from "./paths.js";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const addFormats = formatsModule as unknown as FormatsPlugin;
@@ -22,8 +22,10 @@ async function exists(target: string): Promise<boolean> { try { await access(tar
 async function resourceFiles(root: string): Promise<string[]> {
   const directory = path.join(root, "briefwright.d");
   if (!(await exists(directory))) return [];
+  await assertSafeReadPath(root, directory);
   const top = (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isFile() && /\.ya?ml$/.test(entry.name)).map((entry) => path.join(directory, entry.name));
   const sources = path.join(directory, "sources");
+  if (await exists(sources)) await assertSafeReadPath(root, sources);
   const nested = await exists(sources) ? (await readdir(sources, { withFileTypes: true })).filter((entry) => entry.isFile() && /\.ya?ml$/.test(entry.name)).map((entry) => path.join(sources, entry.name)) : [];
   return [...top, ...nested].sort();
 }
@@ -36,6 +38,7 @@ async function readResources(root: string): Promise<Array<{ path: string; value:
   const validate = ajv.compile(schema);
   const resources: Array<{ path: string; value: Resource }> = [];
   for (const file of files) {
+    await assertSafeReadPath(root, file);
     const value = parse(await readFile(file, "utf8")) as unknown;
     if (!validate(value)) {
       const problems = (validate.errors ?? []).slice(0, 20).map((error: ErrorObject) => `${error.instancePath || "/"} ${error.message}`);

@@ -8,16 +8,22 @@
   migration, and checksummed SQLite migrations with backups;
 - Qwen structured extraction with secret references, endpoint allowlist, bounded retry/response,
   evidence support verification, seven-dimension scoring, Daily/Review/MachineOnly gates and caps;
+- durable validated-analysis caching, cross-run retry of unchanged failed captures, versioned item
+  identity, explainable duplicate clusters, and immutable linked recovery runs;
 - separate Daily and Review artifacts, managed indexes, multi-file/state transactions, complete replay
   and current-disk tamper checks;
 - durable feedback, guarded policy experiments and rollback, cadence proposals with cold-start,
   hysteresis and human locks, and proposal-first knowledge integration;
 - confirmed launchd, cron, and Windows Task Scheduler definitions with explicit enable/disable;
+- live-preview/config/hash/online-preflight binding before schedule enablement, native-state drift
+  inspection, and exact scheduler rollback after partial installation failure;
+- frozen baseline and candidate policy experiments evaluated through the complete selection pipeline,
+  strict deep resource schemas, offline side-effect-free doctor and migration diagnostics;
 - public connector SDK boundary, eight-domain starter preset, Codex Skill, complete documentation,
   community files, cross-platform CI, release provenance workflow, and clean-package smoke test.
 
-Known external validation boundary: the supplied Qwen test key was readable but returned provider
-403 model-access-denied on the standard endpoint and 401 on the Coding Plan endpoint. A successful
+Known external validation boundary: the supplied Beijing Qwen test key can list the model catalog,
+but representative chat-completion calls still return provider 403 model-access-denied. A successful
 credential-authorized live model smoke remains required before a stable release tag.
 
 ## 0.1.0-alpha.1 - 2026-08-10

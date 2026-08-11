@@ -1,12 +1,12 @@
-import { copyFile, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { stringify } from "yaml";
 
 import { loadEffectiveConfig, parseIntentWithMigration } from "../config/load.js";
-import { prepareSafeFilePathSync } from "../config/paths.js";
-import { databaseMigrationStatus, migrateDatabase } from "../state/migrations.js";
+import { assertSafeReadPath, prepareSafeFilePathSync } from "../config/paths.js";
+import { DATABASE_MIGRATIONS, databaseMigrationStatus, migrateDatabase } from "../state/migrations.js";
 
 export async function migrateConfiguration(configPath: string, write: boolean) {
   const absolute = path.resolve(configPath);
@@ -16,7 +16,7 @@ export async function migrateConfiguration(configPath: string, write: boolean) {
   if (!result.changed || !write) {
     return { changed: result.changed, fromVersion: result.fromVersion, toVersion: 2, written: false, preview: rendered };
   }
-  const backupPath = `${absolute}.v${result.fromVersion}.backup`;
+  const backupPath = `${absolute}.v${result.fromVersion}.backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await copyFile(absolute, backupPath);
   const temporary = `${absolute}.tmp-${process.pid}`;
   try {
@@ -31,8 +31,14 @@ export async function migrateConfiguration(configPath: string, write: boolean) {
 
 export async function migrateProjectDatabase(configPath: string, write: boolean) {
   const config = await loadEffectiveConfig(configPath);
-  prepareSafeFilePathSync(config.projectRoot, config.storage.path);
-  const database = new DatabaseSync(config.storage.path);
+  if (!write) {
+    await assertSafeReadPath(config.projectRoot, config.storage.path);
+    try { await access(config.storage.path); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return { current: 0, latest: DATABASE_MIGRATIONS.at(-1)?.version ?? 0, pending: DATABASE_MIGRATIONS, legacy: false, applied: [] as number[] };
+    }
+  } else prepareSafeFilePathSync(config.projectRoot, config.storage.path);
+  const database = new DatabaseSync(config.storage.path, { readOnly: !write });
   try {
     database.exec("PRAGMA foreign_keys = ON");
     return write

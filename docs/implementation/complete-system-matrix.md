@@ -21,33 +21,33 @@ person explicitly approves a bounded commit.
 
 ## Completion gates
 
-| Area | Required behavior | Evidence required | Initial state |
+| Area | Required behavior | Evidence required | Current status |
 |---|---|---|---|
-| First run | Offline demo, guided init, credential-aware setup, preview, actionable errors | CLI E2E on macOS/Linux/Windows; fixture golden output | Partial |
-| Versioned config | Intent migration, typed advanced resources, one precedence model, origins, redaction, semantic diff, dry-run/write migration | Schema, migration, redaction, unknown-field and downgrade tests | Missing |
-| Rules and provenance | Seven canonical policy rules; every run snapshots all active rule IDs and policy/source/prompt/provider/core versions and digests | DB assertions and artifact frontmatter tests | Missing |
-| State migrations | Explicit append-only SQLite migrations; no constructor-time implicit schema repair; migration status and backup | Fresh, upgrade, failure, and idempotency tests | Missing |
-| Run lifecycle | Frozen due manifest; initialization through completion stages; barriers; append-only events; idempotency keys; terminal success/partial/failed | State-machine and crash/retry tests | Missing |
-| Source accounting | Exactly one receipt per due source; integrity equation; accurate last scan/success/effective update | Property and integration tests | Partial |
-| Incremental capture | Durable source cursors and conditional fetch metadata; stable capture IDs; unchanged detection based on content/cursor, not time | Two-run connector tests and replay fixtures | Missing |
-| Connector contract | Typed descriptor/schema/capabilities/auth/risk/owner/examples; offline validate, online check, capture; bounded network and payload | Contract suite for every bundled connector | Partial |
-| Evidence | Canonical URL, evidence class, access/verification state, source metadata, bounded quotation and explicit unsupported claims | Validator and adversarial fixture tests | Missing |
-| AI provider | Provider-neutral interface; Qwen/DashScope adapter; typed secret ref; structured extraction; timeout/retry/rate/failure accounting; deterministic fixture provider | Mock contract tests and authorized live smoke test | Missing |
-| Normalize and dedupe | Stable item identity by canonical URL plus event/version; global duplicate clusters with explainable winner | Unit, property, and multi-source integration tests | Missing |
-| Scoring | Seven weighted 0–5 dimensions; deterministic total; reasons and evidence; hard exclusions | Golden score and boundary tests | Missing |
-| Selection | Daily >=70 plus gates; Review 60–69 plus stable-knowledge potential or explicit ambiguity; otherwise MachineOnly; Daily max 12/domain max 3; empty allowed | Threshold, cap, diversity, zero-item tests | Missing |
-| Daily/Review output | Two independently valid artifacts, required sections and fields, domain coverage, exclusions, failures, receipts, timing and rule snapshots | Markdown schema/golden tests and filesystem boundary tests | Missing |
-| Formal run | Same-day scheduled identity and safe rerun/resume semantics distinct from unique previews; immutable finalized snapshots | CLI E2E and interrupted-run recovery tests | Missing |
-| Replay and audit | Offline deterministic replay from frozen inputs; verifies regenerated content and current disk artifact; explains mismatches | Tamper, version drift, missing input tests | Partial |
-| Feedback | Reviewed/used/ignored/knowledge-worth signals linked to items and runs; minimum sample gates | CLI/API persistence and invalid-reference tests | Missing |
-| Experiments | Candidate policy changes, frozen baseline/treatment, replay evaluation, approval, activation and rollback | Experiment lifecycle tests | Missing |
-| Cadence governance | Cold start, hard floors, weekly evaluation, hysteresis, human locks, explainable proposed cadence changes | Clock-controlled tests | Missing |
-| Scheduling | Dry-run describe plus confirmed install/disable/status for launchd, cron and Windows Task Scheduler; no-op schedules rejected | Adapter golden tests; platform CI smoke | Missing |
-| Knowledge integration | Propose placement/enrichment with evidence/problem/mechanism/boundaries/failures/validation; explicit preview and confirm gateway; bounded Markdown/Obsidian writes | Approval, stale-proposal, path and heading tests | Missing |
-| Doctor | Offline validation separated from online provider/connector/output checks; stable JSON and exit codes; no secrets in diagnostics | CLI E2E and redaction tests | Partial |
-| Skill | Conversational golden path invokes CLI JSON; can configure Qwen, preview, diagnose, run, schedule, collect feedback and approve knowledge; owns no durable state | Packaged Skill inspection and scripted scenarios | Partial |
-| Security | SSRF/rebinding, redirects, payload bounds, path/symlink races, secret redaction, prompt injection boundaries, safe subprocesses and dependency audit | Threat model, adversarial tests, independent review | Partial |
-| Open-source release | Installable package includes schemas/presets/policies/prompts/skill; Node support matrix; contribution/security/community files; tags, changelog, provenance | `npm pack` install smoke, clean-clone E2E, CI matrix, GitHub release | Partial |
+| First run | Offline demo, guided init, credential-aware setup, preview, actionable errors | CLI E2E on macOS/Linux/Windows; fixture golden output | Complete |
+| Versioned config | Intent migration, typed advanced resources, one precedence model, origins, redaction, semantic diff, dry-run/write migration | Schema, migration, redaction, unknown-field and downgrade tests | Complete |
+| Rules and provenance | Seven canonical policy rules; every run snapshots all active rule IDs and policy/source/prompt/provider/core versions and digests | DB assertions and artifact frontmatter tests | Complete |
+| State migrations | Explicit append-only SQLite migrations; no constructor-time implicit schema repair; migration status and backup | Fresh, upgrade, failure, and idempotency tests | Complete |
+| Run lifecycle | Frozen due manifest; initialization through completion stages; barriers; append-only events; idempotency keys; terminal success/partial/failed | State-machine and crash/retry tests | Complete |
+| Source accounting | Exactly one receipt per due source; integrity equation; accurate last scan/success/effective update | Property and integration tests | Complete |
+| Incremental capture | Durable source cursors and conditional fetch metadata; stable capture IDs; unchanged detection based on content/cursor, not time | Two-run connector tests and replay fixtures | Complete |
+| Connector contract | Typed descriptor/schema/capabilities/auth/risk/owner/examples; offline validate, online check, capture; bounded network and payload | Contract suite for every bundled connector | Complete |
+| Evidence | Canonical URL, evidence class, access/verification state, source metadata, bounded quotation and explicit unsupported claims | Validator and adversarial fixture tests | Complete |
+| AI provider | Provider-neutral interface; Qwen/DashScope adapter; typed secret ref; structured extraction; timeout/retry/rate/failure accounting; deterministic fixture provider | Mock contract tests and authorized live smoke test | Implementation complete; live smoke blocked by provider 403 |
+| Normalize and dedupe | Stable item identity by canonical URL plus event/version; global duplicate clusters with explainable winner | Unit, property, and multi-source integration tests | Complete |
+| Scoring | Seven weighted 0–5 dimensions; deterministic total; reasons and evidence; hard exclusions | Golden score and boundary tests | Complete |
+| Selection | Daily >=70 plus gates; Review 60–69 plus stable-knowledge potential or explicit ambiguity; otherwise MachineOnly; Daily max 12/domain max 3; empty allowed | Threshold, cap, diversity, zero-item tests | Complete |
+| Daily/Review output | Two independently valid artifacts, required sections and fields, domain coverage, exclusions, failures, receipts, timing and rule snapshots | Markdown schema/golden tests and filesystem boundary tests | Complete |
+| Formal run | Same-day scheduled identity and safe rerun/resume semantics distinct from unique previews; immutable finalized snapshots | CLI E2E and interrupted-run recovery tests | Complete |
+| Replay and audit | Offline deterministic replay from frozen inputs; verifies regenerated content and current disk artifact; explains mismatches | Tamper, version drift, missing input tests | Complete |
+| Feedback | Reviewed/used/ignored/knowledge-worth signals linked to items and runs; minimum sample gates | CLI/API persistence and invalid-reference tests | Complete |
+| Experiments | Candidate policy changes, frozen baseline/treatment, replay evaluation, approval, activation and rollback | Experiment lifecycle tests | Complete |
+| Cadence governance | Cold start, hard floors, weekly evaluation, hysteresis, human locks, explainable proposed cadence changes | Clock-controlled tests | Complete |
+| Scheduling | Dry-run describe plus confirmed install/disable/status for launchd, cron and Windows Task Scheduler; no-op schedules rejected | Adapter golden tests; platform CI smoke | Complete |
+| Knowledge integration | Propose placement/enrichment with evidence/problem/mechanism/boundaries/failures/validation; explicit preview and confirm gateway; bounded Markdown/Obsidian writes | Approval, stale-proposal, path and heading tests | Complete |
+| Doctor | Offline validation separated from online provider/connector/output checks; stable JSON and exit codes; no secrets in diagnostics | CLI E2E and redaction tests | Complete |
+| Skill | Conversational golden path invokes CLI JSON; can configure Qwen, preview, diagnose, run, recover failures, schedule, collect feedback and approve knowledge; owns no durable state | Packaged Skill inspection and scripted scenarios | Complete |
+| Security | SSRF/rebinding, redirects, payload bounds, path/symlink races, secret redaction, prompt injection boundaries, safe subprocesses and dependency audit | Threat model, adversarial tests, independent review | Complete |
+| Open-source release | Installable package includes schemas/presets/policies/prompts/skill; Node support matrix; contribution/security/community files; tags, changelog, provenance | `npm pack` install smoke, clean-clone E2E, CI matrix, GitHub release | Release candidate complete; stable tag blocked by Qwen live smoke |
 
 ## Canonical workflow semantics
 

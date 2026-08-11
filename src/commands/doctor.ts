@@ -1,9 +1,9 @@
-import { access, constants } from "node:fs/promises";
+import { access, constants, lstat } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { loadEffectiveConfig } from "../config/load.js";
-import { prepareSafeFilePath, prepareSafeFilePathSync } from "../config/paths.js";
+import { assertSafeReadPath } from "../config/paths.js";
 import { resolveSecret } from "../config/secrets.js";
 import { connectorFor } from "../connectors/registry.js";
 import { allowedHostsForSource, createHttpClient } from "../connectors/http.js";
@@ -14,6 +14,24 @@ export interface DoctorCheck {
   name: string;
   ok: boolean;
   detail: string;
+}
+
+async function writableAncestor(projectRoot: string, target: string): Promise<string> {
+  let current = target;
+  for (;;) {
+    try {
+      await access(current, constants.W_OK);
+      const stats = await lstat(current);
+      if (path.resolve(current) === path.resolve(target) && !stats.isDirectory()) {
+        throw new Error(`Output directory target is not a directory: ${target}`);
+      }
+      return current;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (path.resolve(current) === path.resolve(projectRoot)) throw error;
+      current = path.dirname(current);
+    }
+  }
 }
 
 export async function runDoctor(configPath: string, options: { online?: boolean } = {}): Promise<DoctorCheck[]> {
@@ -43,8 +61,9 @@ export async function runDoctor(configPath: string, options: { online?: boolean 
   }
 
   try {
-    await prepareSafeFilePath(config.projectRoot, path.join(config.output.directory, ".briefwright-doctor-probe"));
-    checks.push({ name: "output-boundary", ok: true, detail: config.output.directory });
+    await assertSafeReadPath(config.projectRoot, config.output.directory);
+    const ancestor = await writableAncestor(config.projectRoot, config.output.directory);
+    checks.push({ name: "output-boundary", ok: true, detail: `${config.output.directory} (writable ancestor: ${ancestor})` });
   } catch (error) {
     checks.push({ name: "output-boundary", ok: false, detail: error instanceof Error ? error.message : String(error) });
   }
@@ -55,11 +74,17 @@ export async function runDoctor(configPath: string, options: { online?: boolean 
     checks.push({ name: "credentials", ok: !options.online, detail: `${error instanceof Error ? error.message : String(error)}${options.online ? "" : " Formal runs require it; offline demo and fixture preview do not."}` });
   }
   try {
-    prepareSafeFilePathSync(config.projectRoot, config.storage.path);
-    const database = new DatabaseSync(config.storage.path);
-    const status = databaseMigrationStatus(database);
-    database.close();
-    checks.push({ name: "database-schema", ok: status.pending.length === 0 || status.current === 0, detail: status.current === 0 ? `Fresh database will initialize at schema ${status.latest}` : `schema ${status.current}/${status.latest}; pending ${status.pending.map((item) => item.version).join(",") || "none"}` });
+    await assertSafeReadPath(config.projectRoot, config.storage.path);
+    try {
+      await access(config.storage.path, constants.R_OK);
+      const database = new DatabaseSync(config.storage.path, { readOnly: true });
+      const status = databaseMigrationStatus(database);
+      database.close();
+      checks.push({ name: "database-schema", ok: status.pending.length === 0, detail: `schema ${status.current}/${status.latest}; pending ${status.pending.map((item) => item.version).join(",") || "none"}` });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      checks.push({ name: "database-schema", ok: true, detail: "Fresh database will initialize at the latest packaged schema on first Preview or Run" });
+    }
   } catch (error) {
     checks.push({ name: "database-schema", ok: false, detail: error instanceof Error ? error.message : String(error) });
   }

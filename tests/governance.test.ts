@@ -26,6 +26,8 @@ describe("human governance", () => {
     await expect(projectFeedbackSummary(configPath)).resolves.toMatchObject({ total: 1, reviewedItems: 1, byType: { used: 1 } });
 
     const target = "knowledge/agents.md";
+    await expect(proposeKnowledge(configPath, itemId, "briefing.yaml")).rejects.toThrow("Markdown files");
+    await expect(proposeKnowledge(configPath, itemId, ".briefwright/notes.md")).rejects.toThrow("internal state");
     const proposal = await proposeKnowledge(configPath, itemId, target);
     expect(await readFile(proposal.previewPath, "utf8")).toContain("### Failure paths");
     const committed = await commitKnowledge(configPath, proposal.proposalId);

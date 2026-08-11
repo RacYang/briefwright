@@ -9,6 +9,7 @@ import type { RunResult } from "../core/types.js";
 import type { BriefingItem, Receipt } from "../core/types.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
 import { countReceipts, runOutcome } from "../core/accounting.js";
+import { replayCandidateUnderPolicy, selectCandidatesUnderPolicy } from "../core/selection.js";
 import { databaseMigrationStatus, migrateDatabase } from "./migrations.js";
 
 export class SqliteStateStore {
@@ -53,7 +54,7 @@ export class SqliteStateStore {
     this.appendEvent(runId, now, stage, "run.failed", "run", runId, `${runId}:terminal:failed`, { detail });
   }
 
-  beginFormalRun(config: EffectiveConfig, runId: string, now: string, executionPlan: unknown): "created" | "resumed" | "complete" {
+  beginFormalRun(config: EffectiveConfig, runId: string, now: string, executionPlan: unknown, parentRunId?: string): "created" | "resumed" | "complete" {
     const existing = this.runRecord(runId);
     if (existing) {
       if (existing.configDigest !== configDigest(config)) throw new Error(`Run ${runId} already exists with a different configuration digest`);
@@ -70,10 +71,10 @@ export class SqliteStateStore {
         .run(digest, JSON.stringify(config), now);
       this.database.prepare(`INSERT INTO runs(
         run_id,generated_at,mode,config_digest,status,result_json,started_at,run_kind,current_stage,
-        policy_digest,prompt_digest,source_digest,execution_plan_json
-      ) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?)`).run(
-        runId, now, "live", digest, "running", now, "formal", "initialize",
-        policyDigest, promptDigest, sourceDigest, JSON.stringify(executionPlan),
+        policy_digest,prompt_digest,source_digest,execution_plan_json,parent_run_id
+      ) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,?,?)`).run(
+        runId, now, "live", digest, "running", now, parentRunId ? "formal-retry" : "formal", "initialize",
+        policyDigest, promptDigest, sourceDigest, JSON.stringify(executionPlan), parentRunId ?? null,
       );
       this.database.exec("COMMIT");
       return "created";
@@ -81,6 +82,22 @@ export class SqliteStateStore {
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  retryContext(baseRunId: string, digest: string): { runId: string; parentRunId: string; forcedSourceIds: string[]; resumed: boolean } {
+    const rows = this.database.prepare(`SELECT run_id,status,config_digest,result_json FROM runs
+      WHERE run_id=? OR run_id LIKE ? ORDER BY run_id DESC`).all(baseRunId, `${baseRunId}-R%`) as Array<{ run_id: string; status: string; config_digest: string; result_json: string | null }>;
+    if (!rows.length) throw new Error(`No formal run exists to retry for ${baseRunId}`);
+    const latest = rows[0]!;
+    if (latest.config_digest !== digest) throw new Error(`The failed run ${latest.run_id} used a different configuration. Restore that configuration or wait for a new scheduled batch.`);
+    if (!["success", "partial", "failed"].includes(latest.status) || !latest.result_json) {
+      return { runId: latest.run_id, parentRunId: latest.run_id === baseRunId ? baseRunId : (this.database.prepare("SELECT parent_run_id FROM runs WHERE run_id=?").get(latest.run_id) as { parent_run_id: string }).parent_run_id, forcedSourceIds: this.dueSourceIds(latest.run_id), resumed: true };
+    }
+    if (latest.status === "success") throw new Error(`Run ${latest.run_id} succeeded; there are no failed operations to retry`);
+    const result = JSON.parse(latest.result_json) as RunResult;
+    const failedSourceIds = result.receipts.filter((receipt) => receipt.result === "failed" || receipt.result === "skipped").map((receipt) => receipt.sourceId);
+    const ordinal = rows.filter((row) => row.run_id !== baseRunId).length + 1;
+    return { runId: `${baseRunId}-R${String(ordinal).padStart(2, "0")}`, parentRunId: latest.run_id, forcedSourceIds: failedSourceIds, resumed: false };
   }
 
   freezeDueSources(runId: string, sources: EffectiveConfig["preset"]["sources"], reason = "scheduled"): void {
@@ -143,7 +160,7 @@ export class SqliteStateStore {
         capture_id,run_id,source_id,external_key,canonical_url,title,summary,published_at,captured_at,content_hash,evidence_class,raw_json
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
       for (const capture of captures) {
-        const captureId = `CAP-${createHash("sha256").update(`${capture.sourceId}\n${capture.externalKey}\n${capture.contentHash}`).digest("hex").slice(0, 20).toUpperCase()}`;
+        const captureId = captureIdentity(capture);
         captureStatement.run(captureId, runId, capture.sourceId, capture.externalKey, capture.canonicalUrl, capture.title, capture.summary,
           capture.publishedAt ?? null, capture.capturedAt, capture.contentHash, capture.evidenceClass, JSON.stringify(capture));
         this.database.prepare("INSERT OR IGNORE INTO capture_observations(run_id,capture_id,observed_at,changed) VALUES (?,?,?,?)")
@@ -174,16 +191,73 @@ export class SqliteStateStore {
     return (this.database.prepare("SELECT raw_json FROM captures WHERE run_id=? ORDER BY source_id,captured_at,external_key").all(runId) as Array<{ raw_json: string }>).map((row) => JSON.parse(row.raw_json) as CaptureEnvelope);
   }
 
-  finishFormalRun(config: EffectiveConfig, result: RunResult, items: BriefingItem[], artifacts: Array<{ kind: string; path: string; contentHash: string }>, status: "success" | "partial" | "failed"): void {
-    const captures = this.database.prepare("SELECT capture_id,canonical_url FROM captures WHERE run_id=?").all(result.runId) as Array<{ capture_id: string; canonical_url: string }>;
-    const captureByUrl = new Map(captures.map((row) => [row.canonical_url, row.capture_id]));
+  pendingAnalysisWork(limit: number): Array<{ capture: CaptureEnvelope; analysis?: Record<string, unknown> }> {
+    return (this.database.prepare(`SELECT c.raw_json,
+        (SELECT a.analysis_json FROM analysis_attempts a WHERE a.capture_id=c.capture_id AND a.status='success' AND a.analysis_json IS NOT NULL ORDER BY a.attempted_at DESC LIMIT 1) analysis_json,
+        (SELECT MAX(a.attempted_at) FROM analysis_attempts a WHERE a.capture_id=c.capture_id) last_attempt
+      FROM captures c
+      WHERE NOT EXISTS (SELECT 1 FROM items i WHERE i.capture_id=c.capture_id)
+        AND NOT EXISTS (SELECT 1 FROM analysis_attempts a WHERE a.capture_id=c.capture_id AND a.status='duplicate')
+      ORDER BY CASE WHEN last_attempt IS NULL THEN 0 ELSE 1 END,last_attempt,c.captured_at,c.capture_id LIMIT ?`).all(limit) as Array<{ raw_json: string; analysis_json: string | null }>).map((row) => ({
+        capture: JSON.parse(row.raw_json) as CaptureEnvelope,
+        ...(row.analysis_json ? { analysis: JSON.parse(row.analysis_json) as Record<string, unknown> } : {}),
+      }));
+  }
+
+  pendingAnalysisBacklog(excluded: CaptureEnvelope[]): Array<{ sourceId: string; count: number }> {
+    const captureIds = excluded.map(captureIdentity);
+    const exclusion = captureIds.length ? `AND c.capture_id NOT IN (${captureIds.map(() => "?").join(",")})` : "";
+    return (this.database.prepare(`SELECT c.source_id,COUNT(*) count FROM captures c
+      WHERE NOT EXISTS (SELECT 1 FROM items i WHERE i.capture_id=c.capture_id)
+        AND NOT EXISTS (SELECT 1 FROM analysis_attempts a WHERE a.capture_id=c.capture_id AND a.status='duplicate')
+        ${exclusion}
+      GROUP BY c.source_id ORDER BY c.source_id`).all(...captureIds) as Array<{ source_id: string; count: number }>)
+      .map((row) => ({ sourceId: row.source_id, count: row.count }));
+  }
+
+  recordAnalysisAttempt(runId: string, capture: CaptureEnvelope, status: "success" | "failed" | "duplicate", detail: string | undefined, analysis?: unknown, now = new Date().toISOString()): void {
+    const captureId = captureIdentity(capture);
+    this.database.prepare(`INSERT INTO analysis_attempts(run_id,capture_id,status,detail,analysis_json,attempted_at) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(run_id,capture_id) DO UPDATE SET status=excluded.status,detail=excluded.detail,analysis_json=excluded.analysis_json,attempted_at=excluded.attempted_at`)
+      .run(runId, captureId, status, detail ?? null, analysis === undefined ? null : JSON.stringify(analysis), now);
+  }
+
+  recordDuplicateCluster(runId: string, captures: CaptureEnvelope[], winner: CaptureEnvelope, now = new Date().toISOString()): string {
+    const identities = captures.map(captureIdentity).sort();
+    const clusterId = `DUP-${createHash("sha256").update(identities.join("\n")).digest("hex").slice(0, 20).toUpperCase()}`;
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const itemStatement = this.database.prepare(`INSERT OR REPLACE INTO items(item_id,run_id,capture_id,canonical_identity,title,summary,why_it_matters,domain,evidence_status,evidence_json,analysis_json,score,disposition,exclusion_reason)
+      this.database.prepare("INSERT OR IGNORE INTO duplicate_clusters(run_id,cluster_id,winner_capture_id,reason) VALUES (?,?,?,?)")
+        .run(runId, clusterId, captureIdentity(winner), "same canonical URL, external key, and content hash");
+      const insert = this.database.prepare("INSERT OR IGNORE INTO duplicate_cluster_members(run_id,cluster_id,capture_id,is_winner) VALUES (?,?,?,?)");
+      for (const capture of captures) {
+        insert.run(runId, clusterId, captureIdentity(capture), captureIdentity(capture) === captureIdentity(winner) ? 1 : 0);
+        if (captureIdentity(capture) !== captureIdentity(winner)) this.recordAnalysisAttempt(runId, capture, "duplicate", `Duplicate of ${captureIdentity(winner)}`, undefined, now);
+      }
+      this.database.exec("COMMIT");
+      return clusterId;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  existingCaptureForItem(itemId: string): CaptureEnvelope | null {
+    const row = this.database.prepare(`SELECT c.raw_json FROM items i JOIN captures c ON c.capture_id=i.capture_id
+      WHERE i.item_id=?`).get(itemId) as { raw_json: string } | undefined;
+    return row ? JSON.parse(row.raw_json) as CaptureEnvelope : null;
+  }
+
+  finishFormalRun(config: EffectiveConfig, result: RunResult, items: BriefingItem[], artifacts: Array<{ kind: string; path: string; contentHash: string }>, status: "success" | "partial" | "failed"): void {
+    const captures = this.database.prepare("SELECT capture_id,source_id,content_hash FROM captures").all() as Array<{ capture_id: string; source_id: string; content_hash: string }>;
+    const captureByVersion = new Map(captures.map((row) => [`${row.source_id}\n${row.content_hash}`, row.capture_id]));
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const itemStatement = this.database.prepare(`INSERT INTO items(item_id,run_id,capture_id,canonical_identity,title,summary,why_it_matters,domain,evidence_status,evidence_json,analysis_json,score,disposition,exclusion_reason)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
       const scoreStatement = this.database.prepare(`INSERT OR REPLACE INTO item_scores(item_id,dimension,raw_score,weight,weighted_score,reason) VALUES (?,?,?,?,?,?)`);
       for (const item of items) {
-        const captureId = captureByUrl.get(item.url);
+        const captureId = item.captureHash ? captureByVersion.get(`${item.sourceId}\n${item.captureHash}`) : undefined;
         if (!captureId) continue;
         itemStatement.run(item.id, result.runId, captureId, item.id, item.title, item.summary, item.whyItMatters, item.domain ?? "unknown",
           item.evidenceStatus ?? item.evidence, JSON.stringify({ status: item.evidenceStatus, url: item.url, claims: item.claims ?? [] }), JSON.stringify(item),
@@ -225,38 +299,72 @@ export class SqliteStateStore {
     return { total: rows.reduce((sum, row) => sum + row.count, 0), reviewedItems: range.reviewed, firstAt: range.first_at, lastAt: range.last_at, byType: Object.fromEntries(rows.map((row) => [row.feedback_type, row.count])) };
   }
 
-  createExperiment(policy: PolicyDefinition, baselineDigest: string, now = new Date().toISOString()): string {
+  createExperiment(policy: PolicyDefinition, baselinePolicy: PolicyDefinition, now = new Date().toISOString()): string {
     const id = `EXP-${randomUUID()}`;
-    this.database.prepare(`INSERT INTO experiments(experiment_id,status,baseline_policy_digest,candidate_policy_json,created_at) VALUES (?,?,?,?,?)`)
-      .run(id, "candidate", baselineDigest, JSON.stringify(policy), now);
+    const baselineDigest = hashJson(baselinePolicy);
+    const candidateDigest = hashJson(policy);
+    this.database.prepare(`INSERT INTO experiments(
+      experiment_id,status,baseline_policy_digest,baseline_policy_json,candidate_policy_json,candidate_policy_digest,created_at
+    ) VALUES (?,?,?,?,?,?,?)`).run(id, "candidate", baselineDigest, JSON.stringify(baselinePolicy), JSON.stringify(policy), candidateDigest, now);
     return id;
   }
 
-  experiment(id: string): { id: string; status: string; policy: PolicyDefinition; metrics: unknown } {
-    const row = this.database.prepare("SELECT status,candidate_policy_json,metrics_json FROM experiments WHERE experiment_id=?").get(id) as { status: string; candidate_policy_json: string; metrics_json: string | null } | undefined;
+  experiment(id: string): { id: string; status: string; baselineDigest: string; baselinePolicy: PolicyDefinition; candidateDigest: string; policy: PolicyDefinition; sample: { itemIds: string[]; feedbackCutoff: string } | null; metrics: unknown } {
+    const row = this.database.prepare(`SELECT status,baseline_policy_digest,baseline_policy_json,candidate_policy_json,
+      candidate_policy_digest,sample_json,metrics_json FROM experiments WHERE experiment_id=?`).get(id) as {
+        status: string; baseline_policy_digest: string; baseline_policy_json: string | null; candidate_policy_json: string;
+        candidate_policy_digest: string | null; sample_json: string | null; metrics_json: string | null;
+      } | undefined;
     if (!row) throw new Error(`Experiment not found: ${id}`);
-    return { id, status: row.status, policy: JSON.parse(row.candidate_policy_json) as PolicyDefinition, metrics: row.metrics_json ? JSON.parse(row.metrics_json) : null };
+    if (!row.baseline_policy_json) throw new Error(`Experiment ${id} predates frozen baseline policies and must be recreated`);
+    const policy = JSON.parse(row.candidate_policy_json) as PolicyDefinition;
+    return {
+      id, status: row.status, baselineDigest: row.baseline_policy_digest,
+      baselinePolicy: JSON.parse(row.baseline_policy_json) as PolicyDefinition,
+      candidateDigest: row.candidate_policy_digest ?? hashJson(policy), policy,
+      sample: row.sample_json ? JSON.parse(row.sample_json) as { itemIds: string[]; feedbackCutoff: string } : null,
+      metrics: row.metrics_json ? JSON.parse(row.metrics_json) : null,
+    };
   }
 
   evaluateExperiment(id: string, now = new Date()): { eligible: boolean; metrics: Record<string, unknown> } {
     const experiment = this.experiment(id);
     if (experiment.status !== "candidate" && experiment.status !== "evaluated") throw new Error(`Experiment ${id} cannot be evaluated from status ${experiment.status}`);
-    const feedback = this.feedbackSummary();
-    const spanDays = feedback.firstAt && feedback.lastAt ? Math.floor((new Date(feedback.lastAt).getTime() - new Date(feedback.firstAt).getTime()) / 86_400_000) : 0;
-    const rows = this.database.prepare(`SELECT i.item_id,i.disposition,s.dimension,s.raw_score FROM items i JOIN item_scores s ON s.item_id=i.item_id ORDER BY i.run_id DESC`).all() as Array<{ item_id: string; disposition: string; dimension: string; raw_score: number }>;
-    const grouped = new Map<string, Array<{ dimension: string; raw: number }>>();
-    for (const row of rows) grouped.set(row.item_id, [...(grouped.get(row.item_id) ?? []), { dimension: row.dimension, raw: row.raw_score }]);
-    let candidateDaily = 0;
-    let candidateReview = 0;
-    for (const scores of grouped.values()) {
-      const total = experiment.policy.score.dimensions.reduce((sum, definition) => sum + (scores.find((score) => score.dimension === definition.id)?.raw ?? 0) / 5 * 100 * definition.weight, 0);
-      if (total >= experiment.policy.score.dailyThreshold) candidateDaily += 1;
-      else if (total >= experiment.policy.score.reviewMinimum) candidateReview += 1;
+    const reviewed = this.database.prepare(`SELECT i.item_id,MIN(f.created_at) first_at,MAX(f.created_at) last_at
+      FROM feedback f JOIN items i ON i.item_id=f.item_id GROUP BY i.item_id ORDER BY i.item_id`).all() as Array<{ item_id: string; first_at: string; last_at: string }>;
+    const firstAt = reviewed.reduce<string | null>((value, row) => value === null || row.first_at < value ? row.first_at : value, null);
+    const lastAt = reviewed.reduce<string | null>((value, row) => value === null || row.last_at > value ? row.last_at : value, null);
+    const spanDays = firstAt && lastAt ? Math.floor((new Date(lastAt).getTime() - new Date(firstAt).getTime()) / 86_400_000) : 0;
+    const eligible = experiment.sample !== null || (reviewed.length >= 50 && spanDays >= 14);
+    const sample = experiment.sample ?? (eligible ? { itemIds: reviewed.map((row) => row.item_id), feedbackCutoff: now.toISOString() } : null);
+    if (!eligible) {
+      const metrics = { evaluatedAt: now.toISOString(), eligible: false, reviewedItems: reviewed.length, spanDays, minimumReviewedItems: 50, minimumSpanDays: 14 };
+      this.database.prepare("UPDATE experiments SET metrics_json=? WHERE experiment_id=?").run(JSON.stringify(metrics), id);
+      return { eligible: false, metrics };
     }
-    const eligible = feedback.reviewedItems >= 50 && spanDays >= 14;
-    const metrics = { evaluatedAt: now.toISOString(), eligible, reviewedItems: feedback.reviewedItems, spanDays, baselineItems: grouped.size, candidateDaily, candidateReview, feedbackByType: feedback.byType };
-    this.database.prepare("UPDATE experiments SET status=?,sample_json=?,metrics_json=? WHERE experiment_id=?")
-      .run(eligible ? "evaluated" : "candidate", JSON.stringify({ reviewedItems: feedback.reviewedItems, spanDays }), JSON.stringify(metrics), id);
+    const placeholders = sample!.itemIds.map(() => "?").join(",");
+    const rows = this.database.prepare(`SELECT analysis_json FROM items WHERE item_id IN (${placeholders}) ORDER BY item_id`).all(...sample!.itemIds) as Array<{ analysis_json: string }>;
+    if (rows.length !== sample!.itemIds.length) throw new Error(`Experiment ${id} frozen sample is incomplete`);
+    const items = rows.map((row) => JSON.parse(row.analysis_json) as BriefingItem);
+    const baseline = selectCandidatesUnderPolicy(experiment.baselinePolicy, items.map((item) => replayCandidateUnderPolicy(experiment.baselinePolicy, item)));
+    const candidate = selectCandidatesUnderPolicy(experiment.policy, items.map((item) => replayCandidateUnderPolicy(experiment.policy, item)));
+    const sampleDigest = createHash("sha256").update(`${sample!.itemIds.join("\n")}\n${sample!.feedbackCutoff}`).digest("hex");
+    const frozenFeedback = this.database.prepare(`SELECT MIN(created_at) first_at,MAX(created_at) last_at FROM feedback
+      WHERE item_id IN (${placeholders}) AND created_at<=?`).get(...sample!.itemIds, sample!.feedbackCutoff) as { first_at: string | null; last_at: string | null };
+    const frozenSpanDays = frozenFeedback.first_at && frozenFeedback.last_at
+      ? Math.floor((new Date(frozenFeedback.last_at).getTime() - new Date(frozenFeedback.first_at).getTime()) / 86_400_000) : 0;
+    const feedbackRows = this.database.prepare(`SELECT feedback_type,COUNT(*) count FROM feedback
+      WHERE item_id IN (${placeholders}) AND created_at<=? GROUP BY feedback_type`).all(...sample!.itemIds, sample!.feedbackCutoff) as Array<{ feedback_type: string; count: number }>;
+    const metrics = {
+      evaluatedAt: now.toISOString(), eligible: true, reviewedItems: sample!.itemIds.length, spanDays: frozenSpanDays,
+      sampleDigest, baselinePolicyDigest: experiment.baselineDigest, candidatePolicyDigest: experiment.candidateDigest,
+      baseline: { daily: baseline.daily.length, review: baseline.review.length, machineOnly: baseline.machineOnly.length },
+      candidate: { daily: candidate.daily.length, review: candidate.review.length, machineOnly: candidate.machineOnly.length },
+      delta: { daily: candidate.daily.length - baseline.daily.length, review: candidate.review.length - baseline.review.length, machineOnly: candidate.machineOnly.length - baseline.machineOnly.length },
+      feedbackByType: Object.fromEntries(feedbackRows.map((row) => [row.feedback_type, row.count])),
+    };
+    this.database.prepare("UPDATE experiments SET status='evaluated',sample_json=?,sample_digest=?,metrics_json=? WHERE experiment_id=?")
+      .run(JSON.stringify(sample), sampleDigest, JSON.stringify(metrics), id);
     return { eligible, metrics };
   }
 
@@ -264,19 +372,22 @@ export class SqliteStateStore {
     const current = this.experiment(id);
     const allowed: Record<typeof action, string[]> = { approve: ["evaluated"], activate: ["approved"], rollback: ["active"] };
     if (!allowed[action].includes(current.status)) throw new Error(`Experiment ${id} cannot ${action} from status ${current.status}`);
+    if (action === "activate") {
+      const other = this.database.prepare("SELECT experiment_id FROM experiments WHERE status='active' AND experiment_id<>?").get(id) as { experiment_id: string } | undefined;
+      if (other) throw new Error(`Experiment ${other.experiment_id} is already active; roll it back before activating another`);
+    }
     const status = action === "approve" ? "approved" : action === "activate" ? "active" : "rolled-back";
     const column = action === "approve" ? "approved_at" : action === "activate" ? "activated_at" : "rolled_back_at";
     this.database.prepare(`UPDATE experiments SET status=?,${column}=? WHERE experiment_id=?`).run(status, now, id);
     return { status, policy: current.policy };
   }
 
-  createKnowledgeProposal(itemId: string, targetPath: string, targetHeading: string | undefined, expectedTargetHash: string | undefined, content: string, now = new Date().toISOString()): string {
+  createKnowledgeProposal(itemId: string, targetPath: string, targetHeading: string | undefined, expectedTargetHash: string | undefined, content: string, now = new Date().toISOString(), proposalId = `KNP-${randomUUID()}`): string {
     const item = this.database.prepare("SELECT 1 FROM items WHERE item_id=?").get(itemId);
     if (!item) throw new Error(`Item not found: ${itemId}`);
-    const id = `KNP-${randomUUID()}`;
     this.database.prepare(`INSERT INTO knowledge_proposals(proposal_id,item_id,status,target_path,target_heading,expected_target_hash,content,created_at)
-      VALUES (?,?,?,?,?,?,?,?)`).run(id, itemId, "proposed", targetPath, targetHeading ?? null, expectedTargetHash ?? null, content, now);
-    return id;
+      VALUES (?,?,?,?,?,?,?,?)`).run(proposalId, itemId, "proposed", targetPath, targetHeading ?? null, expectedTargetHash ?? null, content, now);
+    return proposalId;
   }
 
   knowledgeProposal(id: string): { id: string; itemId: string; status: string; targetPath: string; targetHeading?: string; expectedTargetHash?: string; content: string } {
@@ -311,6 +422,16 @@ export class SqliteStateStore {
     return row ? { id: row.schedule_id, adapter: row.adapter, expression: row.expression, installedAt: row.installed_at } : null;
   }
 
+  latestLivePreview(configDigestValue: string): { runId: string; generatedAt: string; status: string; path: string; contentHash: string } | null {
+    const row = this.database.prepare(`SELECT r.run_id,r.generated_at,r.status,a.path,a.content_hash
+      FROM runs r JOIN output_artifacts a ON a.run_id=r.run_id AND a.kind='preview-markdown'
+      WHERE r.run_kind='preview' AND r.mode='live' AND r.config_digest=? AND r.status IN ('success','partial')
+      ORDER BY r.generated_at DESC LIMIT 1`).get(configDigestValue) as {
+        run_id: string; generated_at: string; status: string; path: string; content_hash: string;
+      } | undefined;
+    return row ? { runId: row.run_id, generatedAt: row.generated_at, status: row.status, path: row.path, contentHash: row.content_hash } : null;
+  }
+
   disableSchedule(id: string, now = new Date().toISOString()): void {
     this.database.prepare("UPDATE schedule_installations SET disabled_at=? WHERE schedule_id=? AND disabled_at IS NULL").run(now, id);
   }
@@ -343,9 +464,16 @@ export class SqliteStateStore {
     const row = this.database.prepare("SELECT source_id,proposed_hours,status FROM cadence_proposals WHERE proposal_id=?").get(id) as { source_id: string; proposed_hours: number; status: string } | undefined;
     if (!row) throw new Error(`Cadence proposal not found: ${id}`);
     if (row.status !== "proposed") throw new Error(`Cadence proposal ${id} is already ${row.status}`);
-    if (decision === "approve") this.database.prepare(`INSERT INTO source_settings(source_id,cadence_hours,human_locked,updated_at) VALUES (?,?,0,?)
-      ON CONFLICT(source_id) DO UPDATE SET cadence_hours=excluded.cadence_hours,updated_at=excluded.updated_at`).run(row.source_id, row.proposed_hours, now);
-    this.database.prepare("UPDATE cadence_proposals SET status=?,decided_at=? WHERE proposal_id=?").run(decision === "approve" ? "approved" : "rejected", now, id);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      if (decision === "approve") this.database.prepare(`INSERT INTO source_settings(source_id,cadence_hours,human_locked,updated_at) VALUES (?,?,0,?)
+        ON CONFLICT(source_id) DO UPDATE SET cadence_hours=excluded.cadence_hours,updated_at=excluded.updated_at`).run(row.source_id, row.proposed_hours, now);
+      this.database.prepare("UPDATE cadence_proposals SET status=?,decided_at=? WHERE proposal_id=?").run(decision === "approve" ? "approved" : "rejected", now, id);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   setSourceCadenceLock(sourceId: string, locked: boolean, defaultHours: number, now = new Date().toISOString()): void {
@@ -507,4 +635,8 @@ export class SqliteStateStore {
 
 function hashJson(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function captureIdentity(capture: CaptureEnvelope): string {
+  return `CAP-${createHash("sha256").update(`${capture.sourceId}\n${capture.externalKey}\n${capture.contentHash}`).digest("hex").slice(0, 20).toUpperCase()}`;
 }

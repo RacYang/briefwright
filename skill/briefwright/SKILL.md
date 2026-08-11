@@ -46,6 +46,11 @@ After online doctor passes, run `briefwright --json run` and report:
 Never translate a failed source or unsupported model claim into a confirmed fact. Empty Daily or
 Review artifacts are valid.
 
+If a terminal run has source or model failures, preserve it and use
+`briefwright --json run --retry-failed`. This creates an immutable `-R01` (or later) recovery run
+linked to the original; it never rewrites the original run or artifact. Do not use retry when there
+is no failed or pending work.
+
 ## Explain and repair
 
 Use the CLI before editing:
@@ -77,7 +82,10 @@ Before a native schedule, policy activation/rollback, cadence decision, or knowl
 3. obtain explicit confirmation;
 4. invoke the matching CLI command with `--yes`.
 
-For schedules, call `schedule describe` before `schedule enable --yes`. For knowledge, call
+For schedules, first run `preview --live` with the current configuration, then `doctor --online`,
+then call `schedule describe` before `schedule enable --yes`. Enablement is expected to reject a
+preview older than seven days, a changed configuration, a tampered preview artifact, or a failed
+online preflight. For knowledge, call
 `knowledge propose` and show its preview path before `knowledge commit <id> --yes`. Never write the
 knowledge target directly.
 

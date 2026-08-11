@@ -28,8 +28,8 @@ installation.
 | Filesystem escape | Relative output roots, realpath containment, existing symlink rejection, atomic staging, compensating restore when durable commit fails |
 | Partial multi-file commit | Artifact set is staged and installed together; prior files are restored if SQLite commit fails |
 | State tampering or drift | Foreign keys, immutable finalized runs, explicit checksummed migrations, configuration/rule/prompt/source digests, append-only events, replay and disk hashes |
-| Unsafe automation | Manual is the default; native definition can be inspected; enable/disable requires confirmation; OS changes are compensated if state recording fails |
-| Silent policy optimization | Feedback is inert; 14-day/50-item experiment gate; approval, activation, rollback; cadence proposals, hysteresis, hard bounds, human locks |
+| Unsafe automation | Manual is the default; native definition can be inspected; enable requires a matching untampered live preview and online preflight; enable/disable requires confirmation; exact prior OS state is restored if state recording fails |
+| Silent policy optimization | Feedback is inert; frozen 14-day/50-item sample and feedback cutoff; full baseline/candidate selection replay; approval, activation, drift rejection, rollback; cadence proposals, hysteresis, hard bounds, human locks |
 | Unapproved knowledge mutation | Proposal file, exact target/hash binding, stale-target rejection, explicit commit, project-root containment |
 | Extension supply chain | Standalone CLI never imports packages from configuration; host application registers code explicitly; descriptors and contract tests required |
 

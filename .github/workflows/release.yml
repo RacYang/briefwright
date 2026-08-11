@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
   id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -23,10 +24,18 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
+      - name: Verify tag matches package version
+        run: node -e "const p=require('./package.json'); if ('v'+p.version !== process.env.GITHUB_REF_NAME) throw new Error('tag does not match package version')"
       - run: pnpm run check
       - run: pnpm run build
       - run: pnpm run package:smoke
-      - run: npm publish --provenance --access public
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: briefwright-*.tgz
+      - name: Publish to npm
+        if: vars.PUBLISH_NPM == 'true'
+        run: npm publish briefwright-*.tgz --provenance --access public
       - run: gh release create "$GITHUB_REF_NAME" briefwright-*.tgz --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}

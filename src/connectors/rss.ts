@@ -86,7 +86,7 @@ export class RssConnector implements Connector<RssSource> {
       ...(response.headers.get("last-modified") ? { lastModified: response.headers.get("last-modified")! } : {}),
     });
     const xml = await readTextLimited(response, 5 * 1024 * 1024);
-    const parser = new XMLParser({ ignoreAttributes: false, trimValues: true });
+    const parser = new XMLParser({ ignoreAttributes: false, trimValues: true, processEntities: false });
     const parsed = parser.parse(xml) as {
       rss?: { channel?: { item?: FeedItem | FeedItem[] } };
       feed?: { entry?: FeedItem | FeedItem[] };

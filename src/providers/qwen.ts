@@ -1,9 +1,8 @@
-import { Ajv2020 } from "ajv/dist/2020.js";
-
 import { resolveSecret, sanitizeError } from "../config/secrets.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
 import { readJsonLimited } from "../connectors/http.js";
 import type { AnalysisContext, ModelAnalysis, ModelProvider } from "./types.js";
+import { validateModelAnalysis } from "./validate.js";
 
 interface ChatCompletionResponse {
   choices?: Array<{ message?: { content?: string } }>;
@@ -100,13 +99,6 @@ export class QwenProvider implements ModelProvider {
     } catch {
       throw new Error("Qwen returned invalid JSON for the analysis contract");
     }
-    const validate = new Ajv2020({ allErrors: true, strict: true }).compile(context.prompt.outputSchema);
-    if (!validate(parsed)) {
-      const detail = (validate.errors ?? []).slice(0, 8).map((item) => `${item.instancePath || "/"} ${item.message}`).join("; ");
-      throw new Error(`Qwen analysis did not satisfy the output contract: ${detail}`);
-    }
-    const result = parsed as ModelAnalysis;
-    if (!context.domains.includes(result.domain)) throw new Error(`Qwen returned unsupported domain: ${result.domain}`);
-    return result;
+    return validateModelAnalysis(parsed, context.prompt, context.domains);
   }
 }

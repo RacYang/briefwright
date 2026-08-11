@@ -15,7 +15,7 @@ export async function createPolicyExperiment(configPath: string, candidatePath: 
   validatePolicy(policy);
   const store = new SqliteStateStore(config.storage.path, config.projectRoot);
   try {
-    return { experimentId: store.createExperiment(policy, createHash("sha256").update(canonicalJson(config.policy)).digest("hex")) };
+    return { experimentId: store.createExperiment(policy, config.policy) };
   } finally { store.close(); }
 }
 
@@ -32,21 +32,28 @@ export async function transitionPolicyExperiment(configPath: string, id: string,
     const target = path.join(config.projectRoot, ".briefwright/active-policy.json");
     if (action === "activate") {
       const experiment = store.experiment(id);
+      const currentDigest = createHash("sha256").update(canonicalJson(config.policy)).digest("hex");
+      if (currentDigest !== experiment.baselineDigest) throw new Error(`Experiment ${id} baseline no longer matches the active policy; recreate and re-evaluate it`);
       let transition!: ReturnType<SqliteStateStore["transitionExperiment"]>;
       await writeArtifactSetAtomic(config.projectRoot, [{ path: target, content: `${JSON.stringify(experiment.policy, null, 2)}\n` }], () => {
         transition = store.transitionExperiment(id, action);
       });
       return transition;
     } else if (action === "rollback") {
+      const experiment = store.experiment(id);
+      const currentDigest = createHash("sha256").update(canonicalJson(config.policy)).digest("hex");
+      if (currentDigest !== experiment.candidateDigest) throw new Error(`Experiment ${id} is not the policy currently active on disk`);
       await prepareSafeFilePath(config.projectRoot, target);
       const backup = `${target}.rollback-${randomUUID()}`;
       await rename(target, backup);
+      let transitioned = false;
       try {
         const transition = store.transitionExperiment(id, action);
-        await unlink(backup);
+        transitioned = true;
+        await unlink(backup).catch(() => undefined);
         return transition;
       } catch (error) {
-        await rename(backup, target);
+        if (!transitioned) await rename(backup, target);
         throw error;
       }
     }

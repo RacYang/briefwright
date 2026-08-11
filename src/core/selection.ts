@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 
-import type { EffectiveConfig } from "../config/types.js";
+import type { EffectiveConfig, PolicyDefinition } from "../config/types.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
 import type { ModelAnalysis } from "../providers/types.js";
 import type { BriefingItem } from "./types.js";
 import { verifyAnalysisEvidence } from "./evidence.js";
 
 export function canonicalItemIdentity(capture: CaptureEnvelope): string {
-  return createHash("sha256").update(`${capture.canonicalUrl}\n${capture.externalKey}`).digest("hex");
+  return createHash("sha256").update(`${capture.canonicalUrl}\n${capture.externalKey}\n${capture.contentHash}`).digest("hex");
 }
 
 export function scoreAnalysis(config: EffectiveConfig, analysis: ModelAnalysis) {
@@ -35,6 +35,7 @@ export function buildCandidate(config: EffectiveConfig, capture: CaptureEnvelope
   return {
     id: `AI-${canonicalItemIdentity(capture).slice(0, 12).toUpperCase()}`,
     sourceId: capture.sourceId,
+    captureHash: capture.contentHash,
     title: capture.title,
     summary: analysis.summary,
     whyItMatters: analysis.whyItMatters,
@@ -56,19 +57,53 @@ export function selectCandidates(config: EffectiveConfig, candidates: BriefingIt
   review: BriefingItem[];
   machineOnly: BriefingItem[];
 } {
+  return selectCandidatesUnderPolicy(config.policy, candidates);
+}
+
+export function replayCandidateUnderPolicy(policy: PolicyDefinition, item: BriefingItem): BriefingItem {
+  const dimensions = Object.fromEntries(policy.score.dimensions.map((definition) => {
+    const previous = item.scoreDimensions?.[definition.id];
+    if (!previous) throw new Error(`Item ${item.id} is missing score dimension ${definition.id}`);
+    return [definition.id, {
+      value: previous.value,
+      weight: definition.weight,
+      weighted: previous.value / 5 * 100 * definition.weight,
+      reason: previous.reason,
+    }];
+  }));
+  const score = Math.round(Object.values(dimensions).reduce((sum, dimension) => sum + dimension.weighted, 0));
+  const persistentExclusions = (item.exclusionReasons ?? []).filter((reason) => reason !== "selection-cap");
+  const knowledgePass = Boolean(item.knowledgePotential) && Object.entries(item.knowledgePotential!)
+    .filter(([key]) => key !== "reason")
+    .every(([, value]) => value === true);
+  const eligible = item.evidenceStatus === "confirmed-primary" && persistentExclusions.length === 0 &&
+    Boolean(item.domain && policy.domains.includes(item.domain));
+  let disposition: BriefingItem["disposition"] = "machine-only";
+  if (eligible && score >= policy.score.dailyThreshold) disposition = "daily";
+  else if (eligible && score >= policy.score.reviewMinimum && knowledgePass) disposition = "review";
+  return { ...item, score, scoreDimensions: dimensions, disposition, exclusionReasons: persistentExclusions };
+}
+
+export function selectCandidatesUnderPolicy(policy: PolicyDefinition, candidates: BriefingItem[]): {
+  daily: BriefingItem[];
+  review: BriefingItem[];
+  machineOnly: BriefingItem[];
+} {
   const unique = new Map<string, BriefingItem>();
+  const duplicates: BriefingItem[] = [];
   for (const item of [...candidates].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))) {
     if (!unique.has(item.url)) unique.set(item.url, item);
+    else duplicates.push({ ...item, disposition: "machine-only", exclusionReasons: [...(item.exclusionReasons ?? []).filter((reason) => reason !== "selection-cap"), "duplicate"] });
   }
   const domainCounts = new Map<string, number>();
   const daily: BriefingItem[] = [];
   const review: BriefingItem[] = [];
-  const machineOnly: BriefingItem[] = [];
+  const machineOnly: BriefingItem[] = [...duplicates];
   for (const item of unique.values()) {
     if (item.disposition === "daily") {
       const domain = item.domain ?? "unknown";
       const count = domainCounts.get(domain) ?? 0;
-      if (daily.length < config.policy.score.dailyMaximum && count < config.policy.score.perDomainMaximum) {
+      if (daily.length < policy.score.dailyMaximum && count < policy.score.perDomainMaximum) {
         daily.push(item);
         domainCounts.set(domain, count + 1);
       } else {

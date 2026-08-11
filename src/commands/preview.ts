@@ -9,6 +9,7 @@ import type { Receipt } from "../core/types.js";
 import { renderMarkdown } from "../outputs/markdown.js";
 import { writeArtifactSetAtomic } from "../outputs/write.js";
 import { SqliteStateStore } from "../state/sqlite.js";
+import type { ConnectorContext } from "../connectors/types.js";
 
 export interface PreviewResult {
   outputPath: string;
@@ -22,10 +23,10 @@ export interface PreviewResult {
 
 export async function previewProject(
   configPath: string,
-  options: { live?: boolean } = {},
+  options: { live?: boolean; fetch?: ConnectorContext["fetch"] } = {},
 ): Promise<PreviewResult & { mode: "fixture" | "live" }> {
   const config = await loadEffectiveConfig(configPath);
-  const result = options.live ? await createLiveRun(config) : createFixtureRun(config);
+  const result = options.live ? await createLiveRun(config, new Date(), options.fetch) : createFixtureRun(config);
   const markdown = renderMarkdown(config, result);
   const outputPath = path.join(config.output.directory, `${result.runId}.md`);
   const counts = countReceipts(config.preset.sources.map((source) => source.id), result.receipts);

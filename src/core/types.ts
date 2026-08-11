@@ -9,6 +9,7 @@ export interface Receipt {
 export interface BriefingItem {
   id: string;
   sourceId: string;
+  captureHash?: string;
   title: string;
   summary: string;
   whyItMatters: string;
@@ -38,10 +39,12 @@ export interface RunResult {
   daily: BriefingItem[];
   review: BriefingItem[];
   machineOnly?: BriefingItem[];
-  runKind?: "preview" | "formal";
+  runKind?: "preview" | "formal" | "formal-retry";
   ruleIds?: string[];
   modelFailures?: Array<{ captureId: string; sourceId: string; detail: string }>;
   stageTimings?: Record<string, number>;
+  artifactStageTimings?: Record<string, number>;
   integrityValidated?: boolean;
   cadenceGovernance?: { evaluated: boolean; reason: string; proposals: string[] };
+  outcome?: "success" | "partial" | "failed";
 }

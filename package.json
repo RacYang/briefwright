@@ -20,8 +20,12 @@
     "schemas",
     "templates",
     "skill",
+    "docs",
     "README.md",
     "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
     "LICENSE"
   ],
   "scripts": {

@@ -34,6 +34,27 @@ function relativeParents(root: string, target: string): string[] {
   return relative ? relative.split(path.sep) : [];
 }
 
+/** Validate an existing read path without creating files or following symlinks below the project root. */
+export async function assertSafeReadPath(root: string, target: string): Promise<void> {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = assertContained(resolvedRoot, target);
+  const realRoot = await realpath(resolvedRoot);
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  let current = resolvedRoot;
+  for (const segment of relative ? relative.split(path.sep) : []) {
+    current = path.join(current, segment);
+    try {
+      const stats = await lstat(current);
+      if (stats.isSymbolicLink()) throw new Error(`Read path may not use a symlink: ${current}`);
+      if (current !== resolvedTarget && !stats.isDirectory()) throw new Error(`Read path component is not a directory: ${current}`);
+      assertContained(realRoot, await realpath(current));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+  }
+}
+
 /** Prepare a parent directory without following symlinks below the project root. */
 export async function prepareSafeFilePath(root: string, target: string): Promise<void> {
   const resolvedRoot = path.resolve(root);

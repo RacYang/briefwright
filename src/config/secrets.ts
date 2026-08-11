@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { SecretReference } from "./types.js";
+import { assertSafeReadPath } from "./paths.js";
 
 export class SecretResolutionError extends Error {
   constructor(readonly reference: SecretReference, message: string) {
@@ -28,7 +29,9 @@ function parseDotEnv(text: string): Map<string, string> {
 
 async function localEnvValue(projectRoot: string, key: string): Promise<string | undefined> {
   try {
-    const values = parseDotEnv(await readFile(path.join(projectRoot, ".env.local"), "utf8"));
+    const target = path.join(projectRoot, ".env.local");
+    await assertSafeReadPath(projectRoot, target);
+    const values = parseDotEnv(await readFile(target, "utf8"));
     return values.get(key);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -46,6 +49,7 @@ export async function resolveSecret(reference: SecretReference, projectRoot: str
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new SecretResolutionError(reference, `Secret file reference must stay inside the project: ${reference.key}`);
     }
+    await assertSafeReadPath(projectRoot, target);
     value = (await readFile(target, "utf8")).trim();
   }
   if (!value) {

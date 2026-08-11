@@ -7,7 +7,7 @@ import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import formatsModule, { type FormatsPlugin } from "ajv-formats";
 import { parse } from "yaml";
 
-import { resolveWithinRoot } from "./paths.js";
+import { assertSafeReadPath, resolveWithinRoot } from "./paths.js";
 import type {
   BriefingIntent,
   EffectiveConfig,
@@ -27,6 +27,7 @@ const CORE_VERSION = "0.2.0";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const addFormats = formatsModule as unknown as FormatsPlugin;
+const validatedRuntimeDigests = new Set<string>();
 
 function formatProblem(error: ErrorObject): string {
   const location = error.instancePath || "configuration";
@@ -62,6 +63,7 @@ export async function migrateIntentDocument(document: unknown): Promise<IntentMi
 }
 
 export async function parseIntentWithMigration(configPath: string): Promise<IntentMigrationResult> {
+  await assertSafeReadPath(path.dirname(configPath), configPath);
   const [schemaText, configText] = await Promise.all([
     readFile(path.join(packageRoot, "schemas/briefing.schema.json"), "utf8"),
     readFile(configPath, "utf8"),
@@ -111,7 +113,9 @@ export async function loadEffectiveConfig(configPath: string): Promise<Effective
   const resources = await loadPackagedRuntime(intent);
   let effective = await applyAdvancedResources(buildEffectiveConfig(projectRoot, intent, resources.preset, resources.policy, resources.prompts, resources.provider, "packaged"));
   try {
-    const policy = JSON.parse(await readFile(path.join(projectRoot, ".briefwright/active-policy.json"), "utf8")) as PolicyDefinition;
+    const activePolicyPath = path.join(projectRoot, ".briefwright/active-policy.json");
+    await assertSafeReadPath(projectRoot, activePolicyPath);
+    const policy = JSON.parse(await readFile(activePolicyPath, "utf8")) as PolicyDefinition;
     validatePolicy(policy);
     effective.policy = policy;
     effective.provenance.policyOrigin = "approved-experiment";
@@ -149,22 +153,46 @@ function validatePackagedResources(
   provider: ProviderDefinition,
   bundled = true,
 ): void {
+  const validationDigest = createHash("sha256").update(canonicalJson({ policy, prompts, provider, bundled })).digest("hex");
+  if (validatedRuntimeDigests.has(validationDigest)) return;
   const problems: string[] = [];
   try { validatePolicy(policy); } catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
   try {
-    new Ajv2020({ allErrors: true, strict: true }).compile(prompts.outputSchema);
+    const validate = new Ajv2020({ allErrors: true, strict: true }).compile(prompts.outputSchema);
+    const validProbe = {
+      summary: "summary", whyItMatters: "reason", domain: "agents", claims: ["claim"],
+      knowledgePotential: { reusableQuestion: true, mechanismIncrement: true, durableWithoutVersion: true, reason: "reason" },
+      scores: Object.fromEntries(["authority", "evidence", "relevance", "impact", "novelty", "recency", "actionability"].map((id) => [id, { value: 3, reason: "reason" }])),
+      exclusions: [],
+    };
+    if (!validate(validProbe)) throw new Error("schema rejects the canonical analysis shape");
+    for (const field of ["summary", "whyItMatters", "domain", "claims", "knowledgePotential", "scores", "exclusions"] as const) {
+      const invalid = structuredClone(validProbe) as Record<string, unknown>;
+      delete invalid[field];
+      if (validate(invalid)) throw new Error(`schema does not require ${field}`);
+    }
+    if (validate({ ...validProbe, unexpected: true })) throw new Error("schema permits unknown top-level analysis fields");
+    if (validate({ ...validProbe, domain: 1 })) throw new Error("schema permits a non-string domain");
+    if (validate({ ...validProbe, claims: "claim" })) throw new Error("schema permits non-array claims");
+    const invalidScore = structuredClone(validProbe);
+    invalidScore.scores.authority!.value = 6;
+    if (validate(invalidScore)) throw new Error("schema permits score values above 5");
   } catch (error) {
     problems.push(`prompt output schema is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
   const providerUrl = new URL(provider.baseUrl);
-  const allowed = providerUrl.hostname === "dashscope.aliyuncs.com" || providerUrl.hostname === "dashscope-us.aliyuncs.com" ||
-    providerUrl.hostname === "coding.dashscope.aliyuncs.com" || providerUrl.hostname === "coding-intl.dashscope.aliyuncs.com" ||
-    /^[a-z0-9-]+\.(cn-beijing|ap-southeast-1|ap-northeast-1)\.maas\.aliyuncs\.com$/.test(providerUrl.hostname);
-  if (providerUrl.protocol !== "https:" || !allowed) problems.push("provider baseUrl is not an approved Alibaba Model Studio endpoint");
+  const shared = new Set(["dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "dashscope-us.aliyuncs.com"]);
+  const workspace = /^[a-z0-9-]+\.(cn-beijing|ap-southeast-1|ap-northeast-1|eu-central-1)\.maas\.aliyuncs\.com$/.test(providerUrl.hostname);
+  const trial = /^trial\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/.test(providerUrl.hostname);
+  const cleanUrl = providerUrl.protocol === "https:" && providerUrl.port === "" && providerUrl.username === "" && providerUrl.password === "" && providerUrl.search === "" && providerUrl.hash === "";
+  if (!cleanUrl || (!shared.has(providerUrl.hostname) && !workspace && !trial) || providerUrl.pathname.replace(/\/$/, "") !== "/compatible-mode/v1") {
+    problems.push("provider baseUrl must be an approved pay-as-you-go or trial Alibaba Model Studio OpenAI-compatible endpoint");
+  }
   if (bundled && (provider.apiKey.provider !== "env" || provider.apiKey.key !== "DASHSCOPE_API_KEY")) problems.push("bundled Qwen provider must use env:DASHSCOPE_API_KEY");
   if (provider.apiKey.provider === "env" && !/^[A-Z][A-Z0-9_]*$/.test(provider.apiKey.key)) problems.push("provider env secret key is invalid");
   if (provider.apiKey.provider === "file" && (!provider.apiKey.key || path.isAbsolute(provider.apiKey.key))) problems.push("provider file secret reference must be a relative path");
   if (problems.length) throw new ConfigurationError("Packaged runtime resources are invalid", problems);
+  validatedRuntimeDigests.add(validationDigest);
 }
 
 export function validateEffectiveConfig(config: EffectiveConfig): void {

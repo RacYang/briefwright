@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { buildEffectiveConfig, loadPreset } from "../config/load.js";
+import { buildEffectiveConfig, loadPackagedRuntime } from "../config/load.js";
 import type { BriefingIntent } from "../config/types.js";
 import { createFixtureRun } from "../core/fixture.js";
 import { renderMarkdown } from "../outputs/markdown.js";
@@ -24,18 +24,11 @@ export async function runDemo(root = path.join(homedir(), ".briefwright", "demo"
     outputDirectory: "briefs",
     ai: "qwen",
   };
-  const config = await (async () => {
-    const configPath = path.join(root, "briefing.yaml");
-    const { mkdir, writeFile } = await import("node:fs/promises");
-    const { stringify } = await import("yaml");
-    await mkdir(root, { recursive: true });
-    await writeFile(configPath, stringify(intent), "utf8");
-    const { loadEffectiveConfig } = await import("../config/load.js");
-    return loadEffectiveConfig(configPath);
-  })();
+  const resources = await loadPackagedRuntime(intent);
+  const config = buildEffectiveConfig(path.resolve(root), intent, resources.preset, resources.policy, resources.prompts, resources.provider);
   const result = createFixtureRun(config);
   const markdown = renderMarkdown(config, result);
-  const outputPath = path.join(config.output.directory, "briefwright-demo.md");
+  const outputPath = path.join(config.output.directory, `${result.runId}.md`);
 
   await writeArtifactAtomic(config.projectRoot, outputPath, markdown);
 

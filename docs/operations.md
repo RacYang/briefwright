@@ -9,6 +9,10 @@
 Daily and Review files are still emitted for zero-item and partial runs. Inspect `status`, the artifact
 failure section, and JSON `modelFailures` before retrying.
 
+`run --retry-failed` creates an immutable recovery run linked to the original (`-R01`, `-R02`, and
+so on). It retries only failed/skipped sources and pending model analyses, reusing validated cached
+analyses after a crash. It never overwrites a finalized base run or its artifacts.
+
 ## Diagnostics
 
 `doctor` performs offline schema, filesystem, secret-reference, and database checks. `doctor --online`
@@ -27,6 +31,10 @@ artifacts recorded for a run, including current-disk tampering.
 
 ## Scheduling
 
-Always run `schedule describe` before `schedule enable --yes`. Config changes affect the next run;
-an in-progress run retains its frozen snapshot. Disable with `schedule disable --yes` before moving a
-project directory or executable.
+Before enablement, run a live preview of the current configuration and an online doctor check. A
+matching live preview must be at most seven days old and its artifact must still match the recorded
+hash. Then run `schedule describe` before `schedule enable --yes`. The installer records native and
+SQLite state transactionally and restores the previous native task if recording fails. `schedule
+status` reports native-state drift. Config changes affect the next run; an in-progress run retains
+its frozen snapshot. Disable with `schedule disable --yes` before moving a project directory or
+executable.

@@ -6,7 +6,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["id"],
-      "properties": { "id": { "type": "string", "minLength": 1 } }
+      "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 120 } }
     },
     "envelope": {
       "type": "object",
@@ -17,6 +17,103 @@
         "metadata": { "$ref": "#/$defs/metadata" },
         "spec": { "type": "object" }
       }
+    },
+    "semver": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "key"],
+      "properties": {
+        "provider": { "enum": ["env", "file"] },
+        "key": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
+    "cadence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumHours", "defaultHours", "maximumHours"],
+      "properties": {
+        "minimumHours": { "type": "number", "exclusiveMinimum": 0 },
+        "defaultHours": { "type": "number", "exclusiveMinimum": 0 },
+        "maximumHours": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "connector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "config"],
+          "properties": {
+            "type": { "const": "github-releases" },
+            "config": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["repository"],
+              "properties": { "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "config"],
+          "properties": {
+            "type": { "const": "rss" },
+            "config": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url"],
+              "properties": { "url": { "type": "string", "format": "uri", "pattern": "^https://" } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "config"],
+          "properties": {
+            "type": { "const": "extension" },
+            "config": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["adapter", "options"],
+              "properties": {
+                "adapter": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                "options": {
+                  "type": "object",
+                  "required": ["allowedHosts"],
+                  "properties": {
+                    "allowedHosts": {
+                      "type": "array", "minItems": 1, "uniqueItems": true,
+                      "items": { "type": "string", "pattern": "^[A-Za-z0-9.-]+$" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "title"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^RULE-[A-Z0-9-]+-V[0-9]+\\.[0-9]+$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "scoreDimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "weight"],
+      "properties": {
+        "id": { "enum": ["authority", "evidence", "relevance", "impact", "novelty", "recency", "actionability"] },
+        "weight": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
     }
   },
   "oneOf": [
@@ -24,14 +121,19 @@
       "allOf": [
         { "$ref": "#/$defs/envelope" },
         {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
-            "apiVersion": true, "metadata": true, "kind": { "const": "Profile" },
+            "apiVersion": true,
+            "metadata": true,
+            "kind": { "const": "Profile" },
             "spec": {
-              "type": "object", "additionalProperties": false,
+              "type": "object",
+              "additionalProperties": false,
               "properties": {
                 "runtime": {
-                  "type": "object", "additionalProperties": false,
+                  "type": "object",
+                  "additionalProperties": false,
                   "properties": {
                     "httpConcurrency": { "type": "integer", "minimum": 1, "maximum": 32 },
                     "modelConcurrency": { "type": "integer", "minimum": 1, "maximum": 8 },
@@ -41,15 +143,57 @@
                   }
                 },
                 "provider": {
-                  "type": "object", "additionalProperties": false,
+                  "type": "object",
+                  "additionalProperties": false,
                   "properties": {
-                    "model": { "type": "string", "minLength": 1 },
+                    "model": { "type": "string", "minLength": 1, "maxLength": 120 },
                     "baseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
-                    "apiKey": {
-                      "type": "object", "additionalProperties": false, "required": ["provider", "key"],
-                      "properties": { "provider": { "enum": ["env", "file"] }, "key": { "type": "string", "minLength": 1 } }
-                    }
+                    "apiKey": { "$ref": "#/$defs/secretRef" },
+                    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+                    "retries": { "type": "integer", "minimum": 0, "maximum": 8 }
                   }
+                }
+              },
+              "minProperties": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "allOf": [
+        { "$ref": "#/$defs/envelope" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiVersion": true,
+            "metadata": true,
+            "kind": { "const": "PolicyBundle" },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version", "rules", "score", "domains", "retention"],
+              "properties": {
+                "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                "version": { "$ref": "#/$defs/semver" },
+                "rules": { "type": "array", "minItems": 7, "uniqueItems": true, "items": { "$ref": "#/$defs/rule" } },
+                "score": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["dimensions", "dailyThreshold", "reviewMinimum", "dailyMaximum", "perDomainMaximum"],
+                  "properties": {
+                    "dimensions": { "type": "array", "minItems": 7, "maxItems": 7, "items": { "$ref": "#/$defs/scoreDimension" } },
+                    "dailyThreshold": { "type": "number", "minimum": 0, "maximum": 100 },
+                    "reviewMinimum": { "type": "number", "minimum": 0, "maximum": 100 },
+                    "dailyMaximum": { "type": "integer", "minimum": 1, "maximum": 100 },
+                    "perDomainMaximum": { "type": "integer", "minimum": 1, "maximum": 100 }
+                  }
+                },
+                "domains": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+                "retention": {
+                  "type": "object", "additionalProperties": false, "required": ["quoteWordLimit"],
+                  "properties": { "quoteWordLimit": { "type": "integer", "minimum": 1, "maximum": 25 } }
                 }
               }
             }
@@ -60,25 +204,70 @@
     {
       "allOf": [
         { "$ref": "#/$defs/envelope" },
-        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "PolicyBundle" }, "spec": { "type": "object" } } }
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiVersion": true,
+            "metadata": true,
+            "kind": { "const": "PromptPack" },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "version", "system", "outputSchema"],
+              "properties": {
+                "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                "version": { "$ref": "#/$defs/semver" },
+                "system": { "type": "string", "minLength": 1, "maxLength": 10000 },
+                "outputSchema": { "type": "object", "minProperties": 1 }
+              }
+            }
+          }
+        }
       ]
     },
     {
       "allOf": [
         { "$ref": "#/$defs/envelope" },
-        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "PromptPack" }, "spec": { "type": "object" } } }
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiVersion": true,
+            "metadata": true,
+            "kind": { "const": "Output" },
+            "spec": {
+              "type": "object", "additionalProperties": false, "required": ["directory"],
+              "properties": { "directory": { "type": "string", "minLength": 1, "maxLength": 500 } }
+            }
+          }
+        }
       ]
     },
     {
       "allOf": [
         { "$ref": "#/$defs/envelope" },
-        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "Output" }, "spec": { "type": "object", "additionalProperties": false, "required": ["directory"], "properties": { "directory": { "type": "string", "minLength": 1 } } } } }
-      ]
-    },
-    {
-      "allOf": [
-        { "$ref": "#/$defs/envelope" },
-        { "type": "object", "additionalProperties": false, "properties": { "apiVersion": true, "metadata": true, "kind": { "const": "Source" }, "spec": { "type": "object", "additionalProperties": false, "properties": { "enabled": { "type": "boolean" }, "title": { "type": "string" }, "domain": { "type": "string" }, "cadence": { "type": "object" }, "connector": { "type": "object" } } } } }
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "apiVersion": true,
+            "metadata": true,
+            "kind": { "const": "Source" },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+                "domain": { "type": "string", "minLength": 1, "maxLength": 120 },
+                "cadence": { "$ref": "#/$defs/cadence" },
+                "connector": { "$ref": "#/$defs/connector" }
+              },
+              "minProperties": 1
+            }
+          }
+        }
       ]
     }
   ]

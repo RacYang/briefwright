@@ -119,8 +119,9 @@ program
   .command("run")
   .description("Execute the formal incremental briefing pipeline with the configured AI provider.")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
-  .action(async ({ config }: { config: string }) => {
-    const result = await runFormalProject(config);
+  .option("--retry-failed", "create or resume an immutable recovery run for the latest failed operations", false)
+  .action(async ({ config, retryFailed }: { config: string; retryFailed: boolean }) => {
+    const result = await runFormalProject(config, { retryFailed });
     if (isJsonOutput()) {
       writeJson({
         ok: result.outcome !== "failed",
@@ -438,6 +439,7 @@ program
       return;
     }
     console.log(`Schedule: ${status.scheduleEnabled ? "enabled" : "not enabled"}`);
+    if (!status.scheduleInSync) console.log(`Schedule drift: local state and ${status.nativeSchedule?.location ?? "native scheduler"} disagree`);
     if (!status.latestRun) {
       console.log("Latest run: none");
       console.log("Next: briefwright preview");
@@ -472,7 +474,7 @@ program
   .action(() => {
     const capabilities = {
       version: "0.2.0",
-      commands: ["demo", "init", "preview", "run", "replay", "status", "open", "doctor", "config", "db", "schedule", "feedback", "experiment", "knowledge"],
+      commands: ["demo", "init", "preview", "run", "replay", "status", "open", "doctor", "config", "db", "schedule", "enable", "feedback", "experiment", "cadence", "knowledge", "capabilities"],
       connectors: ["rss", "github-releases"],
       providers: ["qwen", "fixture"],
       presets: ["ai-daily"],

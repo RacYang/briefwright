@@ -211,6 +211,54 @@ export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
       );
     `,
   },
+  {
+    version: 4,
+    name: "frozen-policy-experiments",
+    sql: `
+      ALTER TABLE experiments ADD COLUMN baseline_policy_json TEXT;
+      ALTER TABLE experiments ADD COLUMN candidate_policy_digest TEXT;
+      ALTER TABLE experiments ADD COLUMN sample_digest TEXT;
+    `,
+  },
+  {
+    version: 5,
+    name: "durable-analysis-retries",
+    sql: `
+      CREATE TABLE IF NOT EXISTS analysis_attempts (
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        capture_id TEXT NOT NULL REFERENCES captures(capture_id),
+        status TEXT NOT NULL,
+        detail TEXT,
+        analysis_json TEXT,
+        attempted_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, capture_id)
+      );
+      CREATE INDEX IF NOT EXISTS analysis_attempts_capture ON analysis_attempts(capture_id, attempted_at);
+      CREATE TABLE IF NOT EXISTS duplicate_clusters (
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        cluster_id TEXT NOT NULL,
+        winner_capture_id TEXT NOT NULL REFERENCES captures(capture_id),
+        reason TEXT NOT NULL,
+        PRIMARY KEY (run_id, cluster_id)
+      );
+      CREATE TABLE IF NOT EXISTS duplicate_cluster_members (
+        run_id TEXT NOT NULL,
+        cluster_id TEXT NOT NULL,
+        capture_id TEXT NOT NULL REFERENCES captures(capture_id),
+        is_winner INTEGER NOT NULL,
+        PRIMARY KEY (run_id, cluster_id, capture_id),
+        FOREIGN KEY (run_id, cluster_id) REFERENCES duplicate_clusters(run_id, cluster_id)
+      );
+    `,
+  },
+  {
+    version: 6,
+    name: "immutable-recovery-runs",
+    sql: `
+      ALTER TABLE runs ADD COLUMN parent_run_id TEXT REFERENCES runs(run_id);
+      CREATE INDEX IF NOT EXISTS runs_parent ON runs(parent_run_id);
+    `,
+  },
 ];
 
 function checksum(migration: DatabaseMigration): string {

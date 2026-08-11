@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { loadEffectiveConfig } from "../config/load.js";
 import { resolveWithinRoot, prepareSafeFilePath } from "../config/paths.js";
-import { writeArtifactAtomic, writeArtifactSetAtomic } from "../outputs/write.js";
+import { writeArtifactSetAtomic } from "../outputs/write.js";
 import { SqliteStateStore } from "../state/sqlite.js";
 
 async function optionalFile(pathname: string): Promise<string | undefined> {
@@ -50,14 +50,21 @@ function proposalContent(item: ReturnType<SqliteStateStore["itemForKnowledge"]>)
 export async function proposeKnowledge(configPath: string, itemId: string, target: string, heading?: string) {
   const config = await loadEffectiveConfig(configPath);
   const targetPath = resolveWithinRoot(config.projectRoot, target);
+  const relativeTarget = path.relative(config.projectRoot, targetPath);
+  if (!/\.md$/i.test(targetPath)) throw new Error("Knowledge targets must be Markdown files ending in .md");
+  if (relativeTarget === "briefing.yaml" || relativeTarget === ".briefwright" || relativeTarget.startsWith(`.briefwright${path.sep}`) || relativeTarget === "briefwright.d" || relativeTarget.startsWith(`briefwright.d${path.sep}`)) {
+    throw new Error("Knowledge targets may not modify Briefwright configuration or internal state");
+  }
   await prepareSafeFilePath(config.projectRoot, targetPath);
   const existing = await optionalFile(targetPath);
   const store = new SqliteStateStore(config.storage.path, config.projectRoot);
   try {
     const content = proposalContent(store.itemForKnowledge(itemId));
-    const proposalId = store.createKnowledgeProposal(itemId, targetPath, heading, existing === undefined ? undefined : hash(existing), content);
+    const proposalId = `KNP-${randomUUID()}`;
     const previewPath = path.join(config.projectRoot, ".briefwright", "proposals", `${proposalId}.md`);
-    await writeArtifactAtomic(config.projectRoot, previewPath, content);
+    await writeArtifactSetAtomic(config.projectRoot, [{ path: previewPath, content }], () => {
+      store.createKnowledgeProposal(itemId, targetPath, heading, existing === undefined ? undefined : hash(existing), content, new Date().toISOString(), proposalId);
+    });
     return { proposalId, targetPath, previewPath, targetExists: existing !== undefined, expectedTargetHash: existing === undefined ? null : hash(existing) };
   } finally { store.close(); }
 }
@@ -93,7 +100,6 @@ export async function commitKnowledge(configPath: string, proposalId: string) {
         ? insertAtHeading(existing, proposal.targetHeading, proposal.content)
         : `${existing.trimEnd()}\n\n${proposal.content.trimEnd()}\n`;
     await writeArtifactSetAtomic(config.projectRoot, [{ path: proposal.targetPath, content: next }], () => store.markKnowledgeCommitted(proposalId));
-    await access(proposal.targetPath);
     return { proposalId, targetPath: proposal.targetPath, contentHash: hash(next) };
   } finally { store.close(); }
 }

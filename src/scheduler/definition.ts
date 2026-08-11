@@ -15,6 +15,11 @@ export interface ScheduleDefinition {
   windowsArgs?: string[];
 }
 
+export function scheduleIdentifier(projectRoot: string): string {
+  const hash = createHash("sha256").update(projectRoot).digest("hex").slice(0, 12);
+  return `dev.briefwright.${hash}`;
+}
+
 function xml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -34,8 +39,7 @@ export function scheduleDefinition(options: {
   cliPath: string;
 }): ScheduleDefinition {
   const expression = cronExpression(options.schedule);
-  const hash = createHash("sha256").update(options.projectRoot).digest("hex").slice(0, 12);
-  const id = `dev.briefwright.${hash}`;
+  const id = scheduleIdentifier(options.projectRoot);
   const args = [options.cliPath, "run", "--config", options.configPath];
   const quoted = [options.executable, ...args].map((value) => `'${value.replace(/'/g, `'\\''`)}'`).join(" ");
   if (options.platform === "linux") {

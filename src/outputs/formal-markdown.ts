@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+
 import type { EffectiveConfig } from "../config/types.js";
+import { canonicalJson } from "../config/load.js";
 import { countReceipts, runOutcome } from "../core/accounting.js";
 import type { BriefingItem, RunResult } from "../core/types.js";
 
@@ -40,17 +43,28 @@ function common(config: EffectiveConfig, result: RunResult, kind: "daily" | "rev
   const counts = countReceipts(config.preset.sources.map((source) => source.id), result.receipts);
   const failures = result.receipts.filter((receipt) => receipt.result === "failed");
   const domains = new Set(selected.map((entry) => entry.domain).filter(Boolean));
+  const outcome = result.outcome ?? runOutcome(counts);
+  const policyDigest = createHash("sha256").update(canonicalJson(config.policy)).digest("hex");
+  const promptDigest = createHash("sha256").update(canonicalJson(config.prompts)).digest("hex");
+  const sourceDigest = createHash("sha256").update(canonicalJson(config.preset.sources)).digest("hex");
   return [
     "---",
     `title: ${JSON.stringify(`${config.name} · ${kind === "daily" ? "Daily" : "Review"}`)}`,
     `run_id: ${result.runId}`,
     `artifact_kind: ${kind}`,
-    `status: ${runOutcome(counts)}`,
+    `status: ${outcome}`,
     `generated_at: ${result.generatedAt}`,
     `config_digest: ${result.configDigest}`,
+    `core_version: ${config.provenance.coreVersion}`,
+    `intent_version: ${config.provenance.intentVersion}`,
+    `preset_version: ${config.provenance.presetVersion}`,
     `policy_version: ${config.policy.version}`,
+    `policy_digest: ${policyDigest}`,
     `prompt_version: ${config.prompts.version}`,
+    `prompt_digest: ${promptDigest}`,
     `provider_version: ${config.provider.version}`,
+    `provider_model: ${JSON.stringify(config.provider.model)}`,
+    `source_manifest_digest: ${sourceDigest}`,
     `rule_ids: ${yamlList(config.policy.rules.map((rule) => rule.id))}`,
     "---",
     "",
@@ -58,7 +72,7 @@ function common(config: EffectiveConfig, result: RunResult, kind: "daily" | "rev
     "",
     "## Run summary",
     "",
-    `- Outcome: ${runOutcome(counts)}`,
+    `- Outcome: ${outcome}`,
     `- Due sources: ${counts.due}`,
     `- Receipts: ${result.receipts.length}`,
     `- Updated / unchanged / failed / skipped / missing: ${counts.updated} / ${counts.unchanged} / ${counts.failed} / ${counts.skipped} / ${counts.missing}`,
@@ -67,6 +81,12 @@ function common(config: EffectiveConfig, result: RunResult, kind: "daily" | "rev
     `- Covered domains: ${domains.size ? [...domains].join(", ") : "none"}`,
     `- Active rules: ${config.policy.rules.map((rule) => rule.id).join(", ")}`,
     "",
+    "## Stage timings before publish",
+    "",
+    ...(Object.entries(result.artifactStageTimings ?? {}).length
+      ? Object.entries(result.artifactStageTimings ?? {}).map(([stage, duration]) => `- ${stage}: ${duration} ms`)
+      : ["- No stage timings recorded"]),
+    "",
     "## Coverage by domain",
     "",
     ...config.policy.domains.map((domain) => `- ${domain}: ${selected.filter((entry) => entry.domain === domain).length}`),
@@ -74,6 +94,12 @@ function common(config: EffectiveConfig, result: RunResult, kind: "daily" | "rev
     "## Source failures",
     "",
     ...(failures.length ? failures.map((receipt) => `- ${receipt.sourceId}: ${inline(receipt.detail ?? "No detail was reported")}`) : ["- None"]),
+    "",
+    "## Model failures",
+    "",
+    ...(result.modelFailures?.length
+      ? result.modelFailures.map((failure) => `- ${failure.sourceId} / ${failure.captureId}: ${inline(failure.detail)}`)
+      : ["- None"]),
     "",
   ];
 }

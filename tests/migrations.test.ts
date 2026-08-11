@@ -6,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 import { migrateConfiguration } from "../src/commands/migrate.js";
+import { migrateProjectDatabase } from "../src/commands/migrate.js";
+import { initializeProject } from "../src/commands/init.js";
 import { SqliteStateStore } from "../src/state/sqlite.js";
 import { DATABASE_MIGRATIONS, migrateDatabase } from "../src/state/migrations.js";
 
@@ -35,9 +37,16 @@ describe("versioned migrations", () => {
     const result = migrateDatabase(database, { databasePath, write: true });
     database.close();
     expect(result.current).toBe(result.latest);
-    expect(result.applied).toEqual([2, 3]);
+    expect(result.applied).toEqual([2, 3, 4, 5, 6]);
     await expect(access(result.backupPath!)).resolves.toBeUndefined();
     const store = new SqliteStateStore(databasePath, root);
     store.close();
+  });
+
+  it("previews a fresh database migration without creating state", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-db-preview-"));
+    const configPath = await initializeProject({ directory: root, yes: true });
+    await expect(migrateProjectDatabase(configPath, false)).resolves.toMatchObject({ current: 0, latest: 6, applied: [] });
+    await expect(access(path.join(root, ".briefwright"))).rejects.toThrow();
   });
 });

@@ -14,11 +14,13 @@ import { writeArtifactSetAtomic } from "../outputs/write.js";
 import { updateBriefingIndex } from "../outputs/index.js";
 import { QwenProvider } from "../providers/qwen.js";
 import type { ModelProvider } from "../providers/types.js";
+import { validateModelAnalysis } from "../providers/validate.js";
 import { SqliteStateStore } from "../state/sqlite.js";
 import { countReceipts, runOutcome } from "./accounting.js";
-import { buildCandidate, selectCandidates } from "./selection.js";
+import { buildCandidate, canonicalItemIdentity, selectCandidates } from "./selection.js";
 import { evaluateCadence } from "./cadence.js";
-import type { BriefingItem, Receipt, RunResult } from "./types.js";
+import { verifyAnalysisEvidence } from "./evidence.js";
+import type { Receipt, RunResult } from "./types.js";
 
 export const FORMAL_STAGES = [
   "initialize", "freeze_due_manifest", "discover", "capture", "write_receipts", "normalize",
@@ -78,12 +80,16 @@ export async function runFormalProject(configPath: string, options: {
   now?: Date;
   provider?: ModelProvider;
   fetch?: ConnectorContext["fetch"];
+  retryFailed?: boolean;
 } = {}): Promise<FormalRunOutput> {
   const config = await loadEffectiveConfig(configPath);
   const now = options.now ?? new Date();
   const startedAt = now.toISOString();
-  const runId = `RUN-${dateInTimeZone(now)}-DAILY`;
+  const baseRunId = `RUN-${dateInTimeZone(now)}-DAILY`;
   const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+  const retry = options.retryFailed ? state.retryContext(baseRunId, configDigest(config)) : null;
+  const runId = retry?.runId ?? baseRunId;
+  const isRecovery = Boolean(retry && runId !== baseRunId);
   const executionPlan = {
     runId,
     stages: FORMAL_STAGES,
@@ -91,8 +97,9 @@ export async function runFormalProject(configPath: string, options: {
     provider: { id: config.provider.id, version: config.provider.version, model: config.provider.model, secretRef: config.provider.apiKey },
     provenance: config.provenance,
     sourceIds: config.preset.sources.map((source) => source.id),
+    ...(isRecovery ? { parentRunId: retry!.parentRunId } : {}),
   };
-  const begin = state.beginFormalRun(config, runId, startedAt, executionPlan);
+  const begin = state.beginFormalRun(config, runId, startedAt, executionPlan, isRecovery ? retry!.parentRunId : undefined);
   const recorded = state.runRecord(runId);
   if (begin === "complete" && recorded?.result) {
     const artifacts = state.runArtifacts(runId);
@@ -106,17 +113,17 @@ export async function runFormalProject(configPath: string, options: {
   const stage = async <T>(name: FormalStage, operation: () => Promise<T> | T): Promise<T> => {
     const started = Date.now();
     const ordinal = FORMAL_STAGES.indexOf(name);
-    state.recordStage(runId, name, ordinal, "running", new Date().toISOString());
+    state.recordStage(runId, name, ordinal, "running", startedAt);
     try {
       const value = await operation();
       timings[name] = Date.now() - started;
-      state.recordStage(runId, name, ordinal, "complete", new Date().toISOString(), { durationMs: timings[name] });
+      state.recordStage(runId, name, ordinal, "complete", startedAt, { durationMs: timings[name] });
       return value;
     } catch (error) {
       timings[name] = Date.now() - started;
       const detail = sanitizeError(error);
-      state.recordStage(runId, name, ordinal, "failed", new Date().toISOString(), { durationMs: timings[name], detail });
-      state.failFormalRun(runId, new Date().toISOString(), name, detail);
+      state.recordStage(runId, name, ordinal, "failed", startedAt, { durationMs: timings[name], detail });
+      state.failFormalRun(runId, startedAt, name, detail);
       throw error;
     }
   };
@@ -134,26 +141,32 @@ export async function runFormalProject(configPath: string, options: {
       const counts = countReceipts(state.dueSourceIds(runId), recorded.result.receipts);
       const base = runOutcome(counts);
       const outcome: FormalRunOutput["outcome"] = base === "failed" ? "failed" : base === "partial" || (recorded.result.modelFailures?.length ?? 0) > 0 ? "partial" : "success";
+      recorded.result.outcome = outcome;
       recorded.result.cadenceGovernance = evaluateCadence(config, state, now);
       state.updateRunResult(recorded.result);
-      state.finalizeFormalRun(runId, outcome);
+      state.finalizeFormalRun(runId, outcome, startedAt);
       return { runId, outcome, resumed: true, alreadyComplete: false, dailyPath, reviewPath, result: recorded.result };
     }
-    await stage("initialize", () => undefined);
-    const dueSelection = state.dueSources(config.preset.sources, now);
+    await stage("initialize", () => {
+      if (config.policy.rules.length !== 7) throw new Error("Formal runs require all seven canonical rules");
+      return { configDigest: configDigest(config), sourceCount: config.preset.sources.length };
+    });
+    const dueSelection = retry
+      ? config.preset.sources.filter((source) => retry.forcedSourceIds.includes(source.id)).map((source) => ({ source, reason: `recovery-of-${retry.parentRunId}` }))
+      : state.dueSources(config.preset.sources, now);
     await stage("freeze_due_manifest", () => {
       for (const entry of dueSelection) state.freezeDueSources(runId, [entry.source], entry.reason);
     });
-    await stage("discover", () => undefined);
     const existing = new Set(state.existingReceipts(runId).map((receipt) => receipt.sourceId));
     const dueIds = new Set(state.dueSourceIds(runId));
     const due = config.preset.sources.filter((source) => dueIds.has(source.id) && !existing.has(source.id));
+    const discovered = await stage("discover", () => due.map((source) => ({ source, connector: connectorFor(source) })));
     const fetchClient = options.fetch ?? createHttpClient({
       timeoutSeconds: config.runtime.timeoutSeconds,
       retries: config.runtime.retries,
       allowedHosts: allowedHosts(config),
     });
-    const sourceResults = await stage("capture", () => mapBounded(due, config.runtime.httpConcurrency, async (source) => {
+    const sourceResults = await stage("capture", () => mapBounded(discovered, config.runtime.httpConcurrency, async ({ source, connector }) => {
       const previousCursor = state.sourceCursor(source.id);
       let connectorCursor: Record<string, unknown> = {};
       const context: ConnectorContext = {
@@ -163,7 +176,7 @@ export async function runFormalProject(configPath: string, options: {
         setCursor: (value) => { connectorCursor = value; },
       };
       try {
-        const captures = await connectorFor(source).capture(source, context);
+        const captures = await connector.capture(source, context);
         const notModified = connectorCursor.notModified === true;
         const change = notModified ? { changed: [] as CaptureEnvelope[], next: previousCursor } : changedCaptures(captures, previousCursor);
         const { notModified: _notModified, ...durableConnectorCursor } = connectorCursor;
@@ -179,60 +192,93 @@ export async function runFormalProject(configPath: string, options: {
     }));
     await stage("write_receipts", () => {
       for (const result of sourceResults.sort((a, b) => a.source.id.localeCompare(b.source.id))) {
-        state.recordSourceResult(runId, result.receipt, result.captures, result.cursor, new Date().toISOString());
+        state.recordSourceResult(runId, result.receipt, result.captures, result.cursor, startedAt);
       }
     });
-    const captures = await stage("normalize", () => state.runCaptures(runId));
-    await stage("verify_evidence", () => undefined);
-    const unique = await stage("deduplicate", () => [...new Map(captures.map((capture) => [`${capture.canonicalUrl}\n${capture.externalKey}`, capture])).values()]);
-    const analysisTargets = unique.filter((capture) => sourceResults.length === 0 || sourceResults.some((result) => result.changed.some((changed) => changed.contentHash === capture.contentHash)))
-      .slice(0, config.runtime.maximumCapturesPerRun);
+    await stage("normalize", () => ({ currentRunCaptures: state.runCaptures(runId).length }));
+    const analysisTargets = state.pendingAnalysisWork(config.runtime.maximumCapturesPerRun);
+    const deferredAnalysis = state.pendingAnalysisBacklog(analysisTargets.map((target) => target.capture));
     const provider = options.provider ?? new QwenProvider();
     const providerContext = { interests: config.interests, domains: config.policy.domains, prompt: config.prompts, provider: config.provider, projectRoot: config.projectRoot };
     const modelFailures: NonNullable<RunResult["modelFailures"]> = [];
-    const analyzed = await stage("score", () => mapBounded(analysisTargets, config.runtime.modelConcurrency, async (capture) => {
+    for (const deferred of deferredAnalysis) {
+      modelFailures.push({
+        captureId: `DEFERRED-${createHash("sha256").update(deferred.sourceId).digest("hex").slice(0, 12)}`,
+        sourceId: deferred.sourceId,
+        detail: `${deferred.count} pending capture${deferred.count === 1 ? "" : "s"} deferred by runtime.maximumCapturesPerRun`,
+      });
+    }
+    const verified = await stage("verify_evidence", () => mapBounded(analysisTargets, config.runtime.modelConcurrency, async ({ capture, analysis: cached }) => {
       try {
-        return buildCandidate(config, capture, await provider.analyze(capture, providerContext));
+        const analysis = cached
+          ? validateModelAnalysis(cached, config.prompts, config.policy.domains)
+          : await provider.analyze(capture, providerContext);
+        verifyAnalysisEvidence(capture, analysis);
+        state.recordAnalysisAttempt(runId, capture, "success", cached ? "Reused frozen validated analysis" : undefined, analysis, startedAt);
+        return { capture, analysis };
       } catch (error) {
-        modelFailures.push({ captureId: createHash("sha256").update(capture.contentHash).digest("hex").slice(0, 16), sourceId: capture.sourceId, detail: sanitizeError(error) });
+        const detail = sanitizeError(error);
+        state.recordAnalysisAttempt(runId, capture, "failed", detail, undefined, startedAt);
+        modelFailures.push({ captureId: createHash("sha256").update(capture.contentHash).digest("hex").slice(0, 16), sourceId: capture.sourceId, detail });
         return null;
       }
     }));
-    const candidates = analyzed.filter((item): item is BriefingItem => item !== null);
+    const unique = await stage("deduplicate", () => {
+      const groups = new Map<string, Array<NonNullable<(typeof verified)[number]>>>();
+      for (const item of verified.filter((entry): entry is NonNullable<typeof entry> => entry !== null)) {
+        const key = `${item.capture.canonicalUrl}\n${item.capture.externalKey}\n${item.capture.contentHash}`;
+        groups.set(key, [...(groups.get(key) ?? []), item]);
+      }
+      return [...groups.values()].flatMap((members) => {
+        const sorted = [...members].sort((left, right) => left.capture.sourceId.localeCompare(right.capture.sourceId));
+        const winner = sorted[0]!;
+        const existingWinner = state.existingCaptureForItem(`AI-${canonicalItemIdentity(winner.capture).slice(0, 12).toUpperCase()}`);
+        if (existingWinner) {
+          state.recordDuplicateCluster(runId, [existingWinner, ...sorted.map((item) => item.capture)], existingWinner, startedAt);
+          return [];
+        }
+        if (sorted.length > 1) state.recordDuplicateCluster(runId, sorted.map((item) => item.capture), winner.capture, startedAt);
+        return [winner];
+      });
+    });
+    const candidates = await stage("score", () => unique.map(({ capture, analysis }) => buildCandidate(config, capture, analysis)));
     const selected = await stage("select", () => selectCandidates(config, candidates));
     const receipts = state.existingReceipts(runId);
     const counts = countReceipts(state.dueSourceIds(runId), receipts);
     const baseOutcome = runOutcome(counts);
     const outcome: FormalRunOutput["outcome"] = baseOutcome === "failed" ? "failed" : baseOutcome === "partial" || modelFailures.length ? "partial" : "success";
     const result: RunResult = {
-      runId, generatedAt: new Date().toISOString(), mode: "live", runKind: "formal", configDigest: configDigest(config), receipts,
-      daily: selected.daily, review: selected.review, machineOnly: selected.machineOnly, ruleIds: config.policy.rules.map((rule) => rule.id), modelFailures, stageTimings: timings,
+      runId, generatedAt: startedAt, mode: "live", runKind: isRecovery ? "formal-retry" : "formal", configDigest: configDigest(config), receipts,
+      daily: selected.daily, review: selected.review, machineOnly: selected.machineOnly, ruleIds: config.policy.rules.map((rule) => rule.id), modelFailures, stageTimings: timings, outcome,
     };
     const day = `${runId.slice(4, 8)}-${runId.slice(8, 10)}-${runId.slice(10, 12)}`;
-    const dailyPath = path.join(config.output.directory, "Daily", `${day}-AI-intelligence.md`);
-    const reviewPath = path.join(config.output.directory, "Review", `${day}-AI-intelligence-review.md`);
+    const retrySuffix = /(-R\d+)$/.exec(runId)?.[1] ?? "";
+    const dailyPath = path.join(config.output.directory, "Daily", `${day}-AI-intelligence${retrySuffix}.md`);
+    const reviewPath = path.join(config.output.directory, "Review", `${day}-AI-intelligence-review${retrySuffix}.md`);
     const dailyIndexPath = path.join(config.output.directory, "Daily", "index.md");
     const reviewIndexPath = path.join(config.output.directory, "Review", "index.md");
-    const daily = renderFormalDaily(config, result);
-    const review = renderFormalReview(config, result);
-    const dailyIndex = updateBriefingIndex(await optionalText(config.projectRoot, dailyIndexPath), `${config.name} · Daily index`, path.basename(dailyPath));
-    const reviewIndex = updateBriefingIndex(await optionalText(config.projectRoot, reviewIndexPath), `${config.name} · Review index`, path.basename(reviewPath));
-    await stage("publish", () => undefined);
+    result.artifactStageTimings = { ...timings };
+    const published = await stage("publish", async () => ({
+      daily: renderFormalDaily(config, result),
+      review: renderFormalReview(config, result),
+      dailyIndex: updateBriefingIndex(await optionalText(config.projectRoot, dailyIndexPath), `${config.name} · Daily index`, path.basename(dailyPath)),
+      reviewIndex: updateBriefingIndex(await optionalText(config.projectRoot, reviewIndexPath), `${config.name} · Review index`, path.basename(reviewPath)),
+    }));
     await stage("persist", () => writeArtifactSetAtomic(config.projectRoot, [
-      { path: dailyPath, content: daily }, { path: reviewPath, content: review },
-      { path: dailyIndexPath, content: dailyIndex }, { path: reviewIndexPath, content: reviewIndex },
+      { path: dailyPath, content: published.daily }, { path: reviewPath, content: published.review },
+      { path: dailyIndexPath, content: published.dailyIndex }, { path: reviewIndexPath, content: published.reviewIndex },
     ], () => state.finishFormalRun(config, result, [...selected.daily, ...selected.review, ...selected.machineOnly], [
-        { kind: "daily-markdown", path: dailyPath, contentHash: createHash("sha256").update(daily).digest("hex") },
-        { kind: "review-markdown", path: reviewPath, contentHash: createHash("sha256").update(review).digest("hex") },
+        { kind: "daily-markdown", path: dailyPath, contentHash: createHash("sha256").update(published.daily).digest("hex") },
+        { kind: "review-markdown", path: reviewPath, contentHash: createHash("sha256").update(published.review).digest("hex") },
       ], outcome)));
     await stage("validate_integrity", () => countReceipts(state.dueSourceIds(runId), state.existingReceipts(runId)));
     result.integrityValidated = true;
     await stage("complete", () => undefined);
     const cadence = evaluateCadence(config, state, now);
     result.cadenceGovernance = cadence;
-    state.appendEvent(runId, new Date().toISOString(), "complete", "cadence.evaluated", "run", runId, `${runId}:cadence`, cadence);
+    state.appendEvent(runId, startedAt, "complete", "cadence.evaluated", "run", runId, `${runId}:cadence`, cadence);
     state.updateRunResult(result);
-    state.finalizeFormalRun(runId, outcome);
+    state.finalizeFormalRun(runId, outcome, startedAt);
     return { runId, outcome, resumed: begin === "resumed", alreadyComplete: false, dailyPath, reviewPath, result };
   } finally {
     state.close();

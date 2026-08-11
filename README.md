@@ -54,9 +54,12 @@ manifest, incrementally collects due sources, records exactly one receipt per du
 Qwen's structured output, verifies claim support, scores seven dimensions, applies deterministic
 selection gates, and persists an auditable SQLite snapshot.
 
-Alibaba Model Studio keys and endpoints are region/workspace/plan specific. If `doctor --online`
-reports model access denied, use `config eject` and set the exact authorized model and endpoint in
-`briefwright.d/profile.yaml`.
+Alibaba Model Studio keys and endpoints are region/workspace specific. Briefwright accepts the
+pay-as-you-go and trial OpenAI-compatible endpoints for Beijing, Singapore, Virginia, Tokyo, and
+Frankfurt, including workspace-dedicated domains. Coding Plan and Token Plan keys are intentionally
+rejected because Alibaba documents them for interactive coding tools rather than recurring backend
+jobs. If `doctor --online` reports model access denied, use `config eject` and set the matching
+regional model and endpoint in `briefwright.d/profile.yaml`.
 
 ## The uncomplicated path
 
@@ -72,16 +75,18 @@ briefwright status
 briefwright open
 ```
 
-Set `schedule` in `briefing.yaml` to `daily-at-10` or `weekdays-at-09`, inspect the native definition,
-then explicitly enable it:
+Set `schedule` in `briefing.yaml` to `daily-at-10` or `weekdays-at-09`. Briefwright supports launchd
+on macOS, user cron on Linux, and Task Scheduler on Windows. A manual
+schedule is rejected instead of installing a no-op task. Enablement also requires a successful,
+untampered live preview of the current configuration from the last seven days and a passing online
+preflight:
 
 ```bash
+briefwright preview --live
+briefwright doctor --online
 briefwright schedule describe
 briefwright schedule enable --yes
 ```
-
-Briefwright supports launchd on macOS, user cron on Linux, and Task Scheduler on Windows. A manual
-schedule is rejected instead of installing a no-op task.
 
 ## Trust and governance
 
@@ -91,6 +96,7 @@ schedule is rejected instead of installing a no-op task.
 - Daily allows at most 12 items and three per domain. Empty artifacts are valid.
 - Source failures remain visible and produce partial or failed outcomes.
 - Same-day formal runs are idempotent; interrupted finalization is resumable.
+- `run --retry-failed` creates a linked immutable recovery run instead of changing a finalized run.
 - `replay` regenerates every recorded artifact offline and checks both the snapshot hash and current
   disk content.
 - Feedback cannot change policy directly. Experiments require at least 50 reviewed items across 14
@@ -105,7 +111,7 @@ schedule is rejected instead of installing a no-op task.
 | `demo` | Offline, credential-free demonstration |
 | `init` | Create one intent file without enabling anything |
 | `preview [--live]` | Fixture preview or read-only public-source preview |
-| `run` | Formal incremental AI briefing pipeline |
+| `run [--retry-failed]` | Formal incremental pipeline or linked immutable recovery run |
 | `status`, `open`, `replay` | Inspect and verify durable runs |
 | `config validate|render|explain|diff|migrate|eject` | Typed configuration lifecycle |
 | `db migrate` | Preview or explicitly apply SQLite migrations |

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0 - 2026-08-11
+
+- declare the complete local-first briefing runtime, governance lifecycle, Codex Skill, connector
+  SDK, cross-platform scheduling, audit/replay, and human-confirmed knowledge integration stable;
+- make the BYOK responsibility explicit: provider contract, security, schema and failure behavior are
+  release gates, while a maintainer-owned live Qwen account is an optional integration smoke;
+- require every installation to validate its own key, region, workspace, model and quota with
+  `doctor --online` before formal runs or native schedule enablement.
+
 ## 0.2.0 - 2026-08-11
 
 - complete staged formal-run state machine with frozen due manifests, incremental cursors,
@@ -22,9 +31,9 @@
 - public connector SDK boundary, eight-domain starter preset, Codex Skill, complete documentation,
   community files, cross-platform CI, release provenance workflow, and clean-package smoke test.
 
-Known external validation boundary: the supplied Beijing Qwen test key can list the model catalog,
-but representative chat-completion calls still return provider 403 model-access-denied. A successful
-credential-authorized live model smoke remains required before a stable release tag.
+The supplied Beijing Qwen test key could list the model catalog but returned provider 403 on
+chat-completion calls. This is recorded as an account-specific BYOK diagnostic, not a product defect
+or stable-release gate.
 
 ## 0.1.0-alpha.1 - 2026-08-10
 

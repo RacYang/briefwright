@@ -35,7 +35,7 @@ function writeJson(value: unknown): void {
 program
   .name("briefwright")
   .description("Source-linked, auditable intelligence briefings without the setup wall.")
-  .version("0.2.0")
+  .version("1.0.0")
   .option("--json", "emit bounded machine-readable output", false);
 
 if (jsonRequested) program.exitOverride();
@@ -473,7 +473,7 @@ program
   .description("Describe the installed CLI surface and safety-relevant feature state.")
   .action(() => {
     const capabilities = {
-      version: "0.2.0",
+      version: "1.0.0",
       commands: ["demo", "init", "preview", "run", "replay", "status", "open", "doctor", "config", "db", "schedule", "enable", "feedback", "experiment", "cadence", "knowledge", "capabilities"],
       connectors: ["rss", "github-releases"],
       providers: ["qwen", "fixture"],

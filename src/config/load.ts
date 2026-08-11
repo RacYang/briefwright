@@ -23,7 +23,7 @@ import { validatePolicy } from "./policy.js";
 export { ConfigurationError } from "./errors.js";
 export { validatePolicy } from "./policy.js";
 
-const CORE_VERSION = "0.2.0";
+const CORE_VERSION = "1.0.0";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const addFormats = formatsModule as unknown as FormatsPlugin;

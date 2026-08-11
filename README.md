@@ -6,6 +6,13 @@ versions, failures, and replay data needed to trust a recurring briefing.
 
 ## Try it in two minutes
 
+Install the signed GitHub release package:
+
+```bash
+npm install -g https://github.com/RacYang/briefwright/releases/download/v1.0.0/briefwright-1.0.0.tgz
+briefwright demo
+```
+
 From a checkout:
 
 ```bash

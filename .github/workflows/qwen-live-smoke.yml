@@ -1,0 +1,34 @@
+name: Optional Qwen Live Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qwen-live-smoke:
+    runs-on: ubuntu-latest
+    environment: live-smoke
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.16.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Validate maintainer BYOK integration
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          if [ -z "$DASHSCOPE_API_KEY" ]; then
+            echo "DASHSCOPE_API_KEY is not configured for the live-smoke environment"
+            exit 2
+          fi
+          project_dir="$(mktemp -d)"
+          node dist/cli.js --json init --yes --directory "$project_dir" >/dev/null
+          node dist/cli.js --json doctor --online --config "$project_dir/briefing.yaml"

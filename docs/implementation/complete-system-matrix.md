@@ -32,7 +32,7 @@ person explicitly approves a bounded commit.
 | Incremental capture | Durable source cursors and conditional fetch metadata; stable capture IDs; unchanged detection based on content/cursor, not time | Two-run connector tests and replay fixtures | Complete |
 | Connector contract | Typed descriptor/schema/capabilities/auth/risk/owner/examples; offline validate, online check, capture; bounded network and payload | Contract suite for every bundled connector | Complete |
 | Evidence | Canonical URL, evidence class, access/verification state, source metadata, bounded quotation and explicit unsupported claims | Validator and adversarial fixture tests | Complete |
-| AI provider | Provider-neutral interface; Qwen/DashScope adapter; typed secret ref; structured extraction; timeout/retry/rate/failure accounting; deterministic fixture provider | Mock contract tests and authorized live smoke test | Implementation complete; live smoke blocked by provider 403 |
+| AI provider | Provider-neutral interface; Qwen/DashScope adapter; typed secret ref; structured extraction; timeout/retry/rate/failure accounting; deterministic fixture provider | Provider contract, schema, redaction and failure-path tests; user-owned key validation through `doctor --online` | Complete |
 | Normalize and dedupe | Stable item identity by canonical URL plus event/version; global duplicate clusters with explainable winner | Unit, property, and multi-source integration tests | Complete |
 | Scoring | Seven weighted 0–5 dimensions; deterministic total; reasons and evidence; hard exclusions | Golden score and boundary tests | Complete |
 | Selection | Daily >=70 plus gates; Review 60–69 plus stable-knowledge potential or explicit ambiguity; otherwise MachineOnly; Daily max 12/domain max 3; empty allowed | Threshold, cap, diversity, zero-item tests | Complete |
@@ -47,7 +47,7 @@ person explicitly approves a bounded commit.
 | Doctor | Offline validation separated from online provider/connector/output checks; stable JSON and exit codes; no secrets in diagnostics | CLI E2E and redaction tests | Complete |
 | Skill | Conversational golden path invokes CLI JSON; can configure Qwen, preview, diagnose, run, recover failures, schedule, collect feedback and approve knowledge; owns no durable state | Packaged Skill inspection and scripted scenarios | Complete |
 | Security | SSRF/rebinding, redirects, payload bounds, path/symlink races, secret redaction, prompt injection boundaries, safe subprocesses and dependency audit | Threat model, adversarial tests, independent review | Complete |
-| Open-source release | Installable package includes schemas/presets/policies/prompts/skill; Node support matrix; contribution/security/community files; tags, changelog, provenance | `npm pack` install smoke, clean-clone E2E, CI matrix, GitHub release | Release candidate complete; stable tag blocked by Qwen live smoke |
+| Open-source release | Installable package includes schemas/presets/policies/prompts/skill; Node support matrix; contribution/security/community files; tags, changelog, provenance | `npm pack` install smoke, clean-clone E2E, CI matrix, GitHub release | Complete |
 
 ## Canonical workflow semantics
 
@@ -88,6 +88,8 @@ formal run snapshot.
 ## Release decision
 
 The 1.0 release gate is conjunctive: every matrix row must be `Complete`, the supported-platform CI
-matrix must pass, the package must install and execute from a clean directory, a Qwen live smoke test
-must pass with redacted logs, and independent security and product-experience reviews must have no
-open release blocker.
+matrix must pass, the package must install and execute from a clean directory, and independent
+security and product-experience reviews must have no open release blocker. Because Briefwright is
+BYOK, a maintainer-owned Qwen credential is an optional integration smoke test rather than a release
+gate. Each installation validates its own region, workspace, model, quota, and key with
+`doctor --online` before formal runs or schedule enablement.

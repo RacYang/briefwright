@@ -88,7 +88,7 @@ export function createHttpClient(options: {
           redirect: "error",
           signal: AbortSignal.timeout(options.timeoutSeconds * 1_000),
           headers: {
-            "user-agent": options.userAgent ?? "Briefwright/0.0 (+https://github.com/RacYang/briefwright)",
+            "user-agent": options.userAgent ?? "Briefwright/1.0 (+https://github.com/RacYang/briefwright)",
             ...init.headers,
           },
           dispatcher: secureDispatcher,

@@ -58,7 +58,7 @@ export class QwenProvider implements ModelProvider {
           method: "POST",
           redirect: "error",
           signal: AbortSignal.timeout(context.provider.timeoutSeconds * 1000),
-          headers: { authorization: `Bearer ${secret}`, "content-type": "application/json", "user-agent": "Briefwright/0.2" },
+          headers: { authorization: `Bearer ${secret}`, "content-type": "application/json", "user-agent": "Briefwright/1.0" },
           body: JSON.stringify(body),
         });
         const payload = await readJsonLimited<ChatCompletionResponse>(response, 2 * 1024 * 1024);

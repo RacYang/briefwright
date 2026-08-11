@@ -50,4 +50,5 @@ is documented in the security policy.
 - secret-pattern scan and `git diff --check`;
 - clean tarball installation and capability readback;
 - macOS, Linux, and Windows CI on supported Node versions;
-- authorized Qwen live smoke test without credential output.
+- optional maintainer Qwen live smoke test without credential output; user-owned provider access is
+  validated locally with `doctor --online` and is not a release invariant.

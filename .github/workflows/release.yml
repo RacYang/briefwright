@@ -36,6 +36,13 @@ jobs:
       - name: Publish to npm
         if: vars.PUBLISH_NPM == 'true'
         run: npm publish briefwright-*.tgz --provenance --access public
-      - run: gh release create "$GITHUB_REF_NAME" briefwright-*.tgz --generate-notes --verify-tag
+      - name: Create GitHub release
+        shell: bash
+        run: |
+          release_flags=()
+          if [[ "$GITHUB_REF_NAME" == v0.* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" briefwright-*.tgz --generate-notes --verify-tag "${release_flags[@]}"
         env:
           GH_TOKEN: ${{ github.token }}

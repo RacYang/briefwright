@@ -9,6 +9,7 @@ import { scheduleDefinition, scheduleIdentifier, type SchedulerPlatform } from "
 import { inspectNativeSchedule, installSchedule, uninstallSchedule } from "../scheduler/install.js";
 import { SqliteStateStore } from "../state/sqlite.js";
 import { codexAutomationDefinition } from "../scheduler/codex.js";
+import { hydrateFromControlPlane } from "../control-plane/registry.js";
 
 export async function describeSchedule(configPath: string, platform = process.platform as SchedulerPlatform) {
   const absoluteConfig = path.resolve(configPath);
@@ -23,18 +24,18 @@ export async function scheduleReadiness(configPath: string, options: {
   now?: Date;
   preflight?: (configPath: string) => Promise<DoctorCheck[]>;
 } = {}) {
-  const config = await loadEffectiveConfig(path.resolve(configPath));
+  const config = await hydrateFromControlPlane(await loadEffectiveConfig(path.resolve(configPath)));
   const store = new SqliteStateStore(config.storage.path, config.projectRoot);
   let preview;
-  try { preview = store.latestLivePreview(configDigest(config)); } finally { store.close(); }
-  if (!preview) throw new Error("No successful live preview matches the current configuration. Run 'briefwright preview --live' before enabling the schedule.");
+  try { preview = store.latestEditorialPreview(configDigest(config)); } finally { store.close(); }
+  if (!preview) throw new Error("No usable editorial shadow matches the current configuration. Run 'briefwright preview --live --editorial' before enabling the schedule; a source-only preview is not a content-quality gate.");
   const now = options.now ?? new Date();
   if (now.getTime() - new Date(preview.generatedAt).getTime() > 7 * 86_400_000) {
-    throw new Error("The matching live preview is older than 7 days. Run 'briefwright preview --live' again before enabling the schedule.");
+    throw new Error("The matching editorial shadow is older than 7 days. Run 'briefwright preview --live --editorial' again before enabling the schedule.");
   }
   await prepareSafeFilePath(config.projectRoot, preview.path);
   const diskHash = createHash("sha256").update(await readFile(preview.path)).digest("hex");
-  if (diskHash !== preview.contentHash) throw new Error("The matching live preview artifact changed on disk. Run 'briefwright preview --live' again before enabling the schedule.");
+  if (diskHash !== preview.contentHash) throw new Error("The matching editorial shadow artifact changed on disk. Run 'briefwright preview --live --editorial' again before enabling the schedule.");
   const checks = await (options.preflight ?? ((target) => runDoctor(target, { online: true })))(path.resolve(configPath));
   const failures = checks.filter((check) => !check.ok && check.blocking !== false);
   if (failures.length) throw new Error(`Online preflight failed: ${failures.map((check) => `${check.name}: ${check.detail}`).join("; ")}`);

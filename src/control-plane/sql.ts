@@ -64,8 +64,8 @@ abstract class SqlControlPlane implements ControlPlaneStore {
     if (plan.driver !== this.driver) throw new Error(`Cannot apply ${plan.driver} plan through ${this.driver}`);
     if (plan.conflicts.length) throw new Error("Cannot apply a sync plan with unresolved conflicts");
     const records = [...plan.creates, ...plan.updates];
-    try { await this.ensureSchema(); await this.write(records); return { driver: this.driver, created: plan.creates.length, updated: plan.updates.length, unchanged: plan.unchanged.length, failed: [], digest: plan.digest }; }
-    catch (error) { const detail = error instanceof Error ? error.message : String(error); return { driver: this.driver, created: 0, updated: 0, unchanged: plan.unchanged.length, failed: records.map((record) => ({ kind: record.kind, id: record.id, detail })), digest: plan.digest }; }
+    try { await this.ensureSchema(); await this.write(records); return { driver: this.driver, created: plan.creates.length, updated: plan.updates.length, unchanged: plan.unchanged.length, failed: [], digest: plan.digest, acknowledged: true, readbackRevision: "transaction-committed", readbackDigest: plan.digest }; }
+    catch (error) { const detail = error instanceof Error ? error.message : String(error); return { driver: this.driver, created: 0, updated: 0, unchanged: plan.unchanged.length, failed: records.map((record) => ({ kind: record.kind, id: record.id, detail })), digest: plan.digest, acknowledged: false }; }
   }
 }
 

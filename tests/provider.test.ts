@@ -26,8 +26,9 @@ const capture: CaptureEnvelope = {
 function validAnalysis() {
   const dimension = { value: 4, reason: "Supported by the primary source." };
   return {
-    summary: capture.summary, whyItMatters: "This changes agent runtime governance.", domain: "Agent",
+    title: "Agent runtime adds governed tool budgets", summary: capture.summary, whyItMatters: "This changes agent runtime governance.", domain: "Agent",
     claims: ["Agent runtime adds tool budgets"],
+    claimEvidence: [{ claimIndex: 0, excerpt: "Agent runtime adds tool budgets" }],
     knowledgePotential: { reusableQuestion: true, mechanismIncrement: true, durableWithoutVersion: true, reason: "Reusable runtime boundary." },
     scores: { authority: dimension, evidence: dimension, relevance: dimension, impact: dimension, novelty: dimension, recency: dimension, actionability: dimension }, exclusions: [],
   };

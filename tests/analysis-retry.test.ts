@@ -35,7 +35,8 @@ describe("durable model retry and versioned identity", () => {
       provider: { id: "fail", version: "1.0.0", async check() { return { ok: false, detail: "fixture" }; }, async analyze() { throw new Error("temporary model failure"); } },
       fetch: async (url) => sourceResponse(String(url), "AI agents add an evidence checkpoint."),
     });
-    expect(first.outcome).toBe("partial");
+    expect(first.outcome).toBe("failed");
+    expect(first.publicationState).toBe("withheld");
     expect(first.result.daily).toHaveLength(0);
 
     let analyses = 0;
@@ -63,17 +64,21 @@ describe("durable model retry and versioned identity", () => {
       now: new Date("2026-08-15T02:00:00Z"), provider: new FixtureModelProvider(),
       fetch: async (url) => sourceResponse(String(url), "AI agents add evidence checkpoint version one."),
     });
-    const firstId = first.result.daily[0]!.id;
+    const firstId = [...first.result.daily, ...first.result.review][0]!.id;
     const config = await loadEffectiveConfig(configPath);
     let store = new SqliteStateStore(config.storage.path, config.projectRoot);
     store.addFeedback(firstId, "used", "kept for history", "2026-08-15T03:00:00Z");
     store.close();
 
     const second = await runFormalProject(configPath, {
-      now: new Date("2026-08-16T02:00:00Z"), provider: new FixtureModelProvider(),
+      now: new Date("2026-08-16T03:00:00Z"), provider: new FixtureModelProvider(),
       fetch: async (url) => sourceResponse(String(url), "AI agents add evidence checkpoint version two with tool budgets."),
     });
-    const secondId = second.result.daily[0]!.id;
+    expect(second.result.daily).toHaveLength(0);
+    expect(second.result.review).toHaveLength(0);
+    const secondItem = second.result.machineOnly!.find((item) => item.id !== firstId)!;
+    expect(secondItem.exclusionReasons).toContain("historical-event-duplicate");
+    const secondId = secondItem.id;
     expect(secondId).not.toBe(firstId);
     store = new SqliteStateStore(config.storage.path, config.projectRoot);
     try {

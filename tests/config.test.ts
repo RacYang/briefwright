@@ -9,6 +9,7 @@ import {
   canonicalJson,
   ConfigurationError,
   configDigest,
+  executionConfigProjection,
   loadEffectiveConfig,
   parseIntent,
 } from "../src/config/load.js";
@@ -106,6 +107,44 @@ interests: [AI agents]
 `);
     const config = await loadEffectiveConfig(configPath);
     expect(configDigest(config)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("excludes only derived source timing state from the execution digest", async () => {
+    const configPath = await temporaryProject(`
+version: 3
+name: Digest projection
+interests: [AI agents]
+model: qwen
+processStore: sqlite
+documentStore: local
+`);
+    const config = await loadEffectiveConfig(configPath);
+    const withTiming = structuredClone(config);
+    withTiming.preset.sources[0]!.scheduleState = {
+      frequency: "daily", humanLocked: true, lastScanAt: "2026-08-12T00:00:00Z",
+      lastSuccessAt: "2026-08-12T00:00:01Z", lastEffectiveUpdateAt: "2026-08-12T00:00:02Z",
+      nextScanAt: "2026-08-13T00:00:00Z",
+    };
+    const timingDrift = structuredClone(withTiming);
+    timingDrift.preset.sources[0]!.scheduleState = {
+      ...timingDrift.preset.sources[0]!.scheduleState,
+      lastScanAt: "2026-08-13T00:00:00Z", nextScanAt: "2026-08-14T00:00:00Z",
+    };
+    timingDrift.provenance.controlPlaneRevision = "remote-revision-2";
+    expect(configDigest(timingDrift)).toBe(configDigest(withTiming));
+    expect(executionConfigProjection(timingDrift).preset.sources[0]!.scheduleState).toEqual({ frequency: "daily", humanLocked: true });
+
+    for (const mutate of [
+      (candidate: typeof withTiming) => { candidate.preset.sources[0]!.connector = { type: "rss", config: { url: "https://example.com/feed.xml" } }; },
+      (candidate: typeof withTiming) => { candidate.preset.sources[0]!.cadence = { minimumHours: 1, defaultHours: 2, maximumHours: 3 }; },
+      (candidate: typeof withTiming) => { candidate.preset.sources[0]!.scheduleState!.humanLocked = false; },
+      (candidate: typeof withTiming) => { candidate.policy.rules[0]!.version = "changed"; },
+      (candidate: typeof withTiming) => { candidate.provider.model = "changed-model"; },
+      (candidate: typeof withTiming) => { candidate.runtime.timeoutSeconds += 1; },
+    ]) {
+      const changed = structuredClone(withTiming); mutate(changed);
+      expect(configDigest(changed)).not.toBe(configDigest(withTiming));
+    }
   });
 
   it("refuses configuration and secret reads through project symlinks", async () => {

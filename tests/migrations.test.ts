@@ -37,7 +37,7 @@ describe("versioned migrations", () => {
     const result = migrateDatabase(database, { databasePath, write: true });
     database.close();
     expect(result.current).toBe(result.latest);
-    expect(result.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(result.applied).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     await expect(access(result.backupPath!)).resolves.toBeUndefined();
     const store = new SqliteStateStore(databasePath, root);
     store.close();
@@ -46,7 +46,7 @@ describe("versioned migrations", () => {
   it("previews a fresh database migration without creating state", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-db-preview-"));
     const configPath = await initializeProject({ directory: root, yes: true });
-    await expect(migrateProjectDatabase(configPath, false)).resolves.toMatchObject({ current: 0, latest: 11, applied: [] });
+    await expect(migrateProjectDatabase(configPath, false)).resolves.toMatchObject({ current: 0, latest: 12, applied: [] });
     await expect(access(path.join(root, ".briefwright"))).rejects.toThrow();
   });
 });

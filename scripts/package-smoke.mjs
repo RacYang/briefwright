@@ -10,7 +10,11 @@ execFileSync("npm", ["pack", "--ignore-scripts"], { cwd: root, stdio: "inherit" 
 if (!existsSync(path.join(root, tarball))) throw new Error(`npm pack did not produce ${tarball}`);
 const project = realpathSync(mkdtempSync(path.join(tmpdir(), "briefwright-package-")));
 execFileSync("npm", ["init", "-y"], { cwd: project, stdio: "ignore" });
-execFileSync("npm", ["install", path.join(root, tarball), "--ignore-scripts"], { cwd: project, stdio: "inherit" });
+execFileSync("npm", ["install", path.join(root, tarball), "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline", "--fetch-retries=1", "--fetch-timeout=15000"], {
+  cwd: project,
+  stdio: "inherit",
+  timeout: 120_000,
+});
 const cli = path.join(project, "node_modules", ".bin", process.platform === "win32" ? "briefwright.cmd" : "briefwright");
 const output = execFileSync(cli, ["--json", "capabilities"], { cwd: project, encoding: "utf8" });
 const parsed = JSON.parse(output);

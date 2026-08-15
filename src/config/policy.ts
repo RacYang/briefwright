@@ -28,5 +28,10 @@ export function validatePolicy(policy: PolicyDefinition): void {
   const domains = new Set(policy.domains);
   if (policy.domains.length !== requiredDomains.size || domains.size !== requiredDomains.size || [...requiredDomains].some((domain) => !domains.has(domain))) problems.push("policy must define each canonical intelligence domain exactly once");
   if (!Number.isInteger(policy.retention.quoteWordLimit) || policy.retention.quoteWordLimit < 1 || policy.retention.quoteWordLimit > 25) problems.push("quoteWordLimit must be an integer from 1 to 25");
+  if (policy.freshness) {
+    if (!Number.isFinite(policy.freshness.dailyMaximumAgeHours) || policy.freshness.dailyMaximumAgeHours <= 0) problems.push("dailyMaximumAgeHours must be positive");
+    if (!Number.isFinite(policy.freshness.reviewMaximumAgeHours) || policy.freshness.reviewMaximumAgeHours < policy.freshness.dailyMaximumAgeHours) problems.push("reviewMaximumAgeHours must be at least dailyMaximumAgeHours");
+    if (!Number.isFinite(policy.freshness.futureToleranceHours) || policy.freshness.futureToleranceHours < 0) problems.push("futureToleranceHours must be non-negative");
+  }
   if (problems.length) throw new ConfigurationError("Policy resource is invalid", problems);
 }

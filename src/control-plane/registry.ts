@@ -1,5 +1,5 @@
 import type { EffectiveConfig } from "../config/types.js";
-import { validateEffectiveConfig } from "../config/load.js";
+import { canonicalJson, validateEffectiveConfig } from "../config/load.js";
 import { LarkControlPlaneStore } from "./lark.js";
 import type { LarkRunner } from "./lark-cli.js";
 import { LocalSqliteControlPlane } from "./sqlite.js";
@@ -21,6 +21,21 @@ export async function syncToControlPlane(config: EffectiveConfig, records: Canon
   const store = controlPlaneFor(config, options);
   try { const plan = await store.plan(records); return await store.apply(plan); }
   finally { await store.close(); }
+}
+
+export function reconciliationRecords(
+  current: CanonicalControlRecord[],
+  attempted: CanonicalControlRecord[],
+  failed: SyncResult["failed"],
+): CanonicalControlRecord[] {
+  const key = (record: Pick<CanonicalControlRecord, "kind" | "id">) => `${record.kind}\n${record.id}`;
+  const attemptedByKey = new Map(attempted.map((record) => [key(record), record]));
+  const failedKeys = new Set(failed.map(key));
+  return current.filter((record) => {
+    const recordKey = key(record);
+    const previous = attemptedByKey.get(recordKey);
+    return failedKeys.has(recordKey) || !previous || canonicalJson({ payload: previous.payload, links: previous.links ?? {} }) !== canonicalJson({ payload: record.payload, links: record.links ?? {} });
+  });
 }
 
 export async function hydrateFromControlPlane(config: EffectiveConfig, options: { larkRunner?: LarkRunner } = {}): Promise<EffectiveConfig> {

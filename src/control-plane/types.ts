@@ -38,6 +38,7 @@ export interface SyncPlan {
   unchanged: CanonicalControlRecord[];
   conflicts: SyncConflict[];
   digest: string;
+  linkTargets?: Partial<Record<ControlEntityKind, Record<string, string>>>;
 }
 
 export interface SyncResult {
@@ -47,6 +48,9 @@ export interface SyncResult {
   unchanged: number;
   failed: Array<{ kind: ControlEntityKind; id: string; detail: string }>;
   digest: string;
+  acknowledged: boolean;
+  readbackRevision?: string;
+  readbackDigest?: string;
 }
 
 export interface ControlPlaneStore {

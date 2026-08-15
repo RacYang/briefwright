@@ -57,4 +57,19 @@ describe("advanced configuration", () => {
     await writeFile(profilePath, stringify(profile), "utf8");
     await expect(loadEffectiveConfig(configPath)).rejects.toMatchObject({ problems: [expect.stringContaining("pay-as-you-go or trial")] });
   });
+
+  it("requires a Computer Use source to bind its entry host explicitly", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-computer-config-"));
+    const configPath = await initializeProject({ directory: root, yes: true });
+    await ejectConfiguration(configPath);
+    const sourcePath = path.join(root, "briefwright.d/sources/src-qwen-code-releases.yaml");
+    const source = parse(await readFile(sourcePath, "utf8")) as { spec: { connector: unknown } };
+    source.spec.connector = { type: "computer-use", config: { url: "https://docs.example.com/releases", allowedHosts: ["evil.example"] } };
+    await writeFile(sourcePath, stringify(source), "utf8");
+    await expect(loadEffectiveConfig(configPath)).rejects.toMatchObject({ problems: [expect.stringContaining("must include the entry URL host")] });
+    source.spec.connector = { type: "computer-use", config: { url: "https://docs.example.com/releases", allowedHosts: ["docs.example.com"] } };
+    await writeFile(sourcePath, stringify(source), "utf8");
+    const loaded = await loadEffectiveConfig(configPath);
+    expect(loaded.preset.sources.find((entry) => entry.id === "SRC-QWEN-CODE-RELEASES")).toMatchObject({ connector: { type: "computer-use" } });
+  });
 });

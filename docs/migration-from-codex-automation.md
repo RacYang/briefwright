@@ -35,11 +35,14 @@ Run production-bound diagnostics and a local live preview:
 briefwright --json doctor --online --config /path/to/briefing.yaml
 briefwright --json capture manifest --config /path/to/briefing.yaml
 briefwright --json preview --live --config /path/to/briefing.yaml
+briefwright --json preview --live --editorial --config /path/to/briefing.yaml
 ```
 
 Online doctor probes only currently due sources by default. Use `--all-sources` only for a deliberate
-inventory audit. Preview artifacts always remain under the deployment's `.briefwright/previews` and
-never overwrite the production vault.
+inventory audit. The first preview proves source connectivity; the editorial shadow calls the configured
+real model on a bounded, diversified sample and applies the formal evidence and selection gates. Preview
+artifacts always remain under the deployment's `.briefwright/previews` and never overwrite the production
+vault or write Feishu.
 
 Then copy the configuration into an isolated shadow project with SQLite and a local document folder,
 enable one representative source, and perform a real formal run with the chosen model. Require one
@@ -59,10 +62,16 @@ briefwright --json schedule codex --config /path/to/briefing.yaml
 ```
 
 The exported independent-task prompt includes absolute Node and CLI paths and SHA-256 digests for the
-configuration, exact CLI build, packaged execution protocol, and bound source contract. When X uses
-the Codex browser bridge, the task creates and validates a bundle only when the manifest has due
-sources. It then runs online doctor and the formal pipeline and returns only the bounded completion
-report.
+configuration file, effective configuration (including packaged prompt/policy/provider/preset), exact
+CLI build, packaged execution protocol, and bound source contract. The task always checks the
+external-capture manifest. It creates and validates a bundle only when a due source explicitly uses
+the Codex browser or Computer Use bridge; the latter is constrained to the manifest's entry URL,
+exact allowed hosts, and public read-only interaction policy. It then runs online doctor and the
+formal pipeline and returns only the bounded completion report.
+
+Incident replay may use `preview --live --editorial --capture-bundle BUNDLE --bundle-only` to prevent
+unrelated due sources from entering the shadow. A bundle-only preview is diagnostic evidence only and
+cannot satisfy the schedule enablement gate.
 
 Update the existing automation in place so its identity, daily schedule, notification policy, model,
 reasoning effort, and execution environment remain unchanged. Replace only its prompt with the
@@ -73,15 +82,15 @@ second active task.
 
 Do not manually run the production formal command merely to test cutover if the current day's old task
 has already finalized its run; that could replace same-day human documents with a different due
-snapshot. The isolated shadow run plus production doctor/import/live preview are the pre-cutover
+snapshot. The isolated shadow run plus production doctor/import/editorial shadow are the pre-cutover
 proof. Observe the first normal scheduled run and verify its completion report, Lark run/receipt
 records, Daily/Review artifacts, managed indexes, and replay hashes.
 
-If a same-day terminal run already exists in the process store during cutover, `run` performs a
-remote idempotence adoption: it reads the full canonical run, receipts, items and captures, verifies
-that both existing documents are bound to that Run ID, and returns `alreadyComplete: true` with
-`remoteExisting: true`. It does not replace the documents, repeat model calls, or sync duplicate
-records. A non-terminal remote run fails closed to prevent concurrent writers.
+If a same-day terminal run already exists in the process store during cutover, adoption is allowed
+only when it is explicitly `published`, its linked receipts exactly cover the independently frozen
+due-source manifest, and both local documents match the remotely committed byte digests. Legacy
+terminal records without these fields fail closed and require explicit migration or a recovery run.
+A non-terminal remote run fails closed to prevent concurrent writers.
 
 Rollback is operationally small: restore the previous automation prompt while keeping the same task
 ID and schedule. Imported snapshots and the Briefwright local state are append-only evidence; they do

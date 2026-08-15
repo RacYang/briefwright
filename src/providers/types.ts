@@ -6,7 +6,8 @@ export interface ScoredDimension {
   reason: string;
 }
 
-export interface ModelAnalysis {
+export interface DurableModelAnalysis {
+  title: string;
   summary: string;
   whyItMatters: string;
   domain: string;
@@ -19,6 +20,15 @@ export interface ModelAnalysis {
   };
   scores: Record<"authority" | "evidence" | "relevance" | "impact" | "novelty" | "recency" | "actionability", ScoredDimension>;
   exclusions: Array<"unverified" | "duplicate" | "rumor" | "financing-only" | "marketing-only" | "no-substance">;
+}
+
+export interface ClaimEvidenceAnchor {
+  claimIndex: number;
+  excerpt: string;
+}
+
+export interface ModelAnalysis extends DurableModelAnalysis {
+  claimEvidence: ClaimEvidenceAnchor[];
 }
 
 export interface AnalysisContext {
@@ -35,4 +45,5 @@ export interface ModelProvider {
   readonly version: string;
   check(context: AnalysisContext): Promise<{ ok: boolean; detail: string }>;
   analyze(capture: CaptureEnvelope, context: AnalysisContext): Promise<ModelAnalysis>;
+  analyzeBatch?(captures: CaptureEnvelope[], context: AnalysisContext): Promise<ModelAnalysis[]>;
 }

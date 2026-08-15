@@ -2,15 +2,23 @@ import { createHash } from "node:crypto";
 
 import type { EffectiveConfig, PolicyDefinition } from "../config/types.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
-import type { ModelAnalysis } from "../providers/types.js";
+import type { DurableModelAnalysis, ModelAnalysis } from "../providers/types.js";
 import type { BriefingItem } from "./types.js";
-import { verifyAnalysisEvidence } from "./evidence.js";
+import { verifyAnalysisEvidence, type EvidenceVerification } from "./evidence.js";
 
 export function canonicalItemIdentity(capture: CaptureEnvelope): string {
   return createHash("sha256").update(`${capture.canonicalUrl}\n${capture.externalKey}\n${capture.contentHash}`).digest("hex");
 }
 
-export function scoreAnalysis(config: EffectiveConfig, analysis: ModelAnalysis) {
+export function canonicalEventIdentity(canonicalUrl: string, title: string): string {
+  const url = new URL(canonicalUrl);
+  url.hash = "";
+  const immutableUrl = /\/(?:releases\/tag|abs|status)\//i.test(url.pathname);
+  const normalizedTitle = title.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return createHash("sha256").update(`${url.toString()}\n${immutableUrl ? "immutable" : normalizedTitle}`).digest("hex");
+}
+
+export function scoreAnalysis(config: EffectiveConfig, analysis: DurableModelAnalysis) {
   const dimensions = Object.fromEntries(config.policy.score.dimensions.map((definition) => {
     const score = analysis.scores[definition.id];
     const weighted = score.value / 5 * 100 * definition.weight;
@@ -20,17 +28,34 @@ export function scoreAnalysis(config: EffectiveConfig, analysis: ModelAnalysis) 
   return { total, dimensions };
 }
 
-export function buildCandidate(config: EffectiveConfig, capture: CaptureEnvelope, analysis: ModelAnalysis): BriefingItem {
+export function buildCandidate(config: EffectiveConfig, capture: CaptureEnvelope, analysis: DurableModelAnalysis, verification?: EvidenceVerification, options: {
+  now?: Date;
+  recovery?: boolean;
+} = {}): BriefingItem {
   const score = scoreAnalysis(config, analysis);
-  const verification = verifyAnalysisEvidence(capture, analysis);
-  const evidenceStatus = verification.confirmed ? "confirmed-primary" : capture.evidenceClass === "secondary" ? "secondary-clue" : "unverified";
-  const exclusions = [...analysis.exclusions];
+  const resolvedVerification = verification ?? verifyAnalysisEvidence(capture, analysis as ModelAnalysis);
+  const evidenceStatus = resolvedVerification.confirmed ? "confirmed-primary" : capture.evidenceClass === "secondary" ? "secondary-clue" : "unverified";
+  const exclusions: string[] = [...analysis.exclusions];
   if (evidenceStatus !== "confirmed-primary") exclusions.push("unverified");
+  const dailyExclusions: string[] = [];
+  const freshness = config.policy.freshness ?? { dailyMaximumAgeHours: 72, reviewMaximumAgeHours: 720, futureToleranceHours: 6 };
+  const now = options.now ?? new Date(capture.capturedAt);
+  if (options.recovery) exclusions.push("recovery-only");
+  if (!capture.publishedAt) dailyExclusions.push("missing-published-at");
+  else {
+    const ageHours = (now.getTime() - new Date(capture.publishedAt).getTime()) / 3_600_000;
+    if (!Number.isFinite(ageHours)) exclusions.push("invalid-published-at");
+    else if (ageHours < -freshness.futureToleranceHours) exclusions.push("future-published-at");
+    else {
+      if (ageHours > freshness.dailyMaximumAgeHours) dailyExclusions.push("stale-for-daily");
+      if (ageHours > freshness.reviewMaximumAgeHours) exclusions.push("stale-for-review");
+    }
+  }
   const knowledgePass = Object.entries(analysis.knowledgePotential)
     .filter(([key]) => key !== "reason")
     .every(([, value]) => value === true);
   let disposition: BriefingItem["disposition"] = "machine-only";
-  if (!exclusions.length && score.total >= config.policy.score.dailyThreshold) disposition = "daily";
+  if (!exclusions.length && !dailyExclusions.length && score.total >= config.policy.score.dailyThreshold) disposition = "daily";
   else if (!exclusions.length && score.total >= config.policy.score.reviewMinimum && knowledgePass) disposition = "review";
   return {
     id: `AI-${canonicalItemIdentity(capture).slice(0, 12).toUpperCase()}`,
@@ -38,8 +63,9 @@ export function buildCandidate(config: EffectiveConfig, capture: CaptureEnvelope
     captureHash: capture.contentHash,
     capturedAt: capture.capturedAt,
     ...(capture.publishedAt ? { publishedAt: capture.publishedAt } : {}),
+    ...(capture.pageUpdatedAt ? { pageUpdatedAt: capture.pageUpdatedAt } : {}),
     sourceExcerpt: capture.summary,
-    title: capture.title,
+    title: analysis.title.trim() || capture.title,
     summary: analysis.summary,
     whyItMatters: analysis.whyItMatters,
     url: capture.canonicalUrl,
@@ -51,7 +77,8 @@ export function buildCandidate(config: EffectiveConfig, capture: CaptureEnvelope
     disposition,
     claims: analysis.claims,
     knowledgePotential: analysis.knowledgePotential,
-    exclusionReasons: [...new Set([...exclusions, ...verification.reasons])],
+    exclusionReasons: [...new Set([...exclusions, ...resolvedVerification.reasons])],
+    dailyExclusionReasons: [...new Set(dailyExclusions)],
   };
 }
 
@@ -76,27 +103,36 @@ export function replayCandidateUnderPolicy(policy: PolicyDefinition, item: Brief
   }));
   const score = Math.round(Object.values(dimensions).reduce((sum, dimension) => sum + dimension.weighted, 0));
   const persistentExclusions = (item.exclusionReasons ?? []).filter((reason) => reason !== "selection-cap");
+  const dailyExclusions = item.dailyExclusionReasons ?? [];
   const knowledgePass = Boolean(item.knowledgePotential) && Object.entries(item.knowledgePotential!)
     .filter(([key]) => key !== "reason")
     .every(([, value]) => value === true);
   const eligible = item.evidenceStatus === "confirmed-primary" && persistentExclusions.length === 0 &&
     Boolean(item.domain && policy.domains.includes(item.domain));
   let disposition: BriefingItem["disposition"] = "machine-only";
-  if (eligible && score >= policy.score.dailyThreshold) disposition = "daily";
+  if (eligible && dailyExclusions.length === 0 && score >= policy.score.dailyThreshold) disposition = "daily";
   else if (eligible && score >= policy.score.reviewMinimum && knowledgePass) disposition = "review";
-  return { ...item, score, scoreDimensions: dimensions, disposition, exclusionReasons: persistentExclusions };
+  return { ...item, score, scoreDimensions: dimensions, disposition, exclusionReasons: persistentExclusions, dailyExclusionReasons: dailyExclusions };
 }
 
-export function selectCandidatesUnderPolicy(policy: PolicyDefinition, candidates: BriefingItem[]): {
+export function selectCandidatesUnderPolicy(policy: PolicyDefinition, candidates: BriefingItem[], options: { eventDedupe?: boolean } = {}): {
   daily: BriefingItem[];
   review: BriefingItem[];
   machineOnly: BriefingItem[];
 } {
   const unique = new Map<string, BriefingItem>();
+  const semanticEvents = new Set<string>();
   const duplicates: BriefingItem[] = [];
   for (const item of [...candidates].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))) {
-    if (!unique.has(item.url)) unique.set(item.url, item);
-    else duplicates.push({ ...item, disposition: "machine-only", exclusionReasons: [...(item.exclusionReasons ?? []).filter((reason) => reason !== "selection-cap"), "duplicate"] });
+    const normalized = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const semanticKey = item.publishedAt && item.captureHash
+      ? createHash("sha256").update(`${normalized(item.title)}\n${normalized(item.summary)}\n${item.publishedAt.slice(0, 10)}\n${item.captureHash}`).digest("hex")
+      : null;
+    const duplicateEvent = options.eventDedupe !== false && Boolean(semanticKey && semanticEvents.has(semanticKey));
+    if (!unique.has(item.url) && !duplicateEvent) {
+      unique.set(item.url, item); if (semanticKey) semanticEvents.add(semanticKey);
+    }
+    else duplicates.push({ ...item, disposition: "machine-only", exclusionReasons: [...(item.exclusionReasons ?? []).filter((reason) => reason !== "selection-cap"), "duplicate-event"] });
   }
   const domainCounts = new Map<string, number>();
   const daily: BriefingItem[] = [];

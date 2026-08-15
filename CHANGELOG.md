@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.1.2 - 2026-08-15
+
+- add a governed Computer Use source bridge for public dynamic pages, with frozen entry URLs, exact
+  host allowlists, read-only interaction policy, capture-mode binding, validated external bundles,
+  formal-run integration, and an explicit Feishu `采集方式` control field;
+- separate source-connectivity previews from bounded real-model editorial shadows, require a usable
+  failure-free model sample before schedule enablement, and generate specific reader-facing titles
+  instead of exposing bare version numbers or unexplained source titles;
+- bind Codex automations to the rendered effective-configuration digest so changing packaged prompts,
+  policies, providers or presets cannot bypass the automation's immutable CLI and config-file pins;
+- verify a content digest of the complete installed runtime tree and resolved dependencies instead of
+  treating the unchanged `dist/cli.js` entrypoint hash as proof that the rest of the code is immutable;
+- recover historical evidence from the original canonical URL when bounded feeds or release windows
+  no longer return the frozen content hash, while enforcing source-domain and repository boundaries;
+  keep operational failures, timings, and storage diagnostics out of Daily and Review reading copies;
+- replace cross-language lexical-overlap rejection with exact, bounded source-language evidence
+  anchors checked against transient full source text; persist only verification fingerprints, and
+  add an immutable evidence-reverification recovery mode for previously unverified primary items;
+- detect the process or macOS user locale for formal Daily and Review rendering, support an explicit
+  `BRIEFWRIGHT_LOCALE` override, and keep machine-readable frontmatter IDs language-neutral;
+- bound HTTP dispatcher cleanup, retain per-origin pools for forced teardown, and bypass graceful
+  close after request failures such as rejected 308 redirects so online doctor can always emit its
+  structured blocking and warning verdict;
+- normalize RSS guid/id values from text, numbers, and attributed XML objects, fall back to the
+  canonical URL, and guard SQLite state writes from non-bindable capture envelope values;
+- write Lark linked-record fields in validated batches after stable record IDs exist, use the current
+  `link_table` field contract, and reconcile only failed or newly audited records.
+- version the execution-configuration digest, exclude only control-plane-derived scan timestamps and
+  revisions, and compare legacy frozen snapshots so retries tolerate runtime progress but reject
+  connector, cadence, policy, provider, runtime, output, storage, protocol, and contract drift;
+- map recovery receipts to the existing manual-force due-reason option and include unresolved
+  control-plane records from the retry lineage in the next governed reconciliation.
+- hydrate the full configured control plane before explicit sync plan/apply so historical repair
+  preserves the frozen run's complete source and rule link surface.
+
 ## 2.1.1 - 2026-08-11
 
 - replace the process-heavy project introduction with a concise product-first README covering the

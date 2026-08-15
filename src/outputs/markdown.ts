@@ -9,10 +9,12 @@ function safeInline(value: string): string {
 function renderItem(item: BriefingItem): string {
   const title = safeInline(item.title);
   return [
-    `## ${item.id} · ${title}`,
+    `### ${title}`,
     "",
     `- Score: ${item.score}`,
     `- Evidence: ${item.evidence}`,
+    ...(item.publishedAt ? [`- Source date: ${item.publishedAt.slice(0, 10)}`] : []),
+    ...(item.pageUpdatedAt ? [`- Page updated: ${item.pageUpdatedAt.slice(0, 10)} (not an event date)`] : []),
     `- Source: <${item.url}>`,
     "",
     safeInline(item.summary),
@@ -22,23 +24,52 @@ function renderItem(item: BriefingItem): string {
 }
 
 export function renderMarkdown(config: EffectiveConfig, result: RunResult): string {
-  const dueIds = config.preset.sources.map((source) => source.id);
+  const dueIds = result.dueSourceIds ?? config.preset.sources.map((source) => source.id);
   const counts = countReceipts(dueIds, result.receipts);
-  const status = runOutcome(counts);
+  const status = result.outcome ?? runOutcome(counts);
   const failedReceipts = result.receipts.filter((receipt) => receipt.result === "failed");
   const failureSection = failedReceipts.length > 0
     ? [
-        "## Source failures",
+        `<details><summary>Source failures (${failedReceipts.length})</summary>`,
         "",
         ...failedReceipts.map((receipt) =>
           `- ${receipt.sourceId}: ${(receipt.detail ?? "No detail was reported").replace(/[\r\n]+/g, " ").slice(0, 500)}`
         ),
         "",
+        "</details>",
+        "",
       ]
     : [];
-  const items = result.daily.length > 0
-    ? result.daily.map(renderItem).join("\n\n")
-    : "No high-signal items met the configured evidence and selection gates.";
+  const renderGroup = (title: string, items: BriefingItem[]) => [
+    `## ${title}`,
+    "",
+    items.length ? items.map(renderItem).join("\n\n") : "No items met this selection gate.",
+    "",
+  ];
+  const itemSections = result.previewKind === "editorial"
+    ? [...renderGroup("Daily candidates", result.daily), ...renderGroup("Review candidates", result.review)]
+    : renderGroup("Briefing candidates", result.daily);
+  const modelFailures = result.modelFailures ?? [];
+  const modelFailureSection = modelFailures.length ? [
+    `<details><summary>Model analysis failures (${modelFailures.length})</summary>`,
+    "",
+    ...modelFailures.map((failure) => `- ${failure.sourceId} / ${failure.captureId}: ${safeInline(failure.detail).slice(0, 500)}`),
+    "",
+    "</details>",
+    "",
+  ] : [];
+  const analysisQuality = result.previewAnalysis ? [
+    "## Editorial shadow coverage",
+    "",
+    `- Eligible recent captures: ${result.previewAnalysis.eligibleCaptures}`,
+    `- Bounded sample: ${result.previewAnalysis.analyzed}/${result.previewAnalysis.sampleLimit}`,
+    `- Model analyses accepted: ${result.previewAnalysis.succeeded}`,
+    `- Model analyses failed: ${result.previewAnalysis.failed}`,
+    `- Selected: ${result.daily.length} Daily; ${result.review.length} Review; ${result.machineOnly?.length ?? 0} machine-only`,
+    "",
+    ...modelFailureSection,
+  ] : [];
+  const itemCount = result.daily.length + result.review.length;
 
   return [
     "---",
@@ -47,7 +78,9 @@ export function renderMarkdown(config: EffectiveConfig, result: RunResult): stri
     `status: ${status}`,
     `data_mode: ${result.mode}`,
     `generated_at: ${result.generatedAt}`,
-    `item_count: ${result.daily.length}`,
+    `preview_kind: ${result.mode === "fixture" ? "fixture" : result.previewKind ?? "source"}`,
+    `preview_scope: ${result.previewScope ?? "configured-due"}`,
+    `item_count: ${itemCount}`,
     `config_digest: ${result.configDigest}`,
     "---",
     "",
@@ -55,9 +88,16 @@ export function renderMarkdown(config: EffectiveConfig, result: RunResult): stri
     "",
     result.mode === "fixture"
       ? "> Demonstration data: this briefing is generated from bundled fixtures and is not current news."
-      : "",
+      : result.previewKind === "editorial"
+        ? "> Editorial shadow only: a bounded sample was analyzed by the configured real model. Nothing was written to Feishu or the formal Daily/Review paths."
+        : "> Source-connectivity preview only: candidates below use deterministic lexical ranking and do not prove editorial quality.",
+    ...(result.previewScope === "capture-bundle"
+      ? ["", "> Bundle-only scope: only sources listed in the supplied capture bundle were eligible; no other configured sources were fetched."]
+      : []),
     "",
-    "## Run summary",
+    ...itemSections,
+    ...analysisQuality,
+    "## Run quality",
     "",
     `- Due sources: ${counts.due}`,
     `- Receipts: ${result.receipts.length}`,
@@ -69,7 +109,5 @@ export function renderMarkdown(config: EffectiveConfig, result: RunResult): stri
     `- Missing: ${counts.missing}`,
     "",
     ...failureSection,
-    items,
-    "",
   ].filter((line, index, lines) => !(line === "" && lines[index - 1] === "")).join("\n");
 }

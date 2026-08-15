@@ -1,24 +1,31 @@
-import { mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { parse, stringify } from "yaml";
 
 import { ejectConfiguration } from "../src/commands/config.js";
 import { initializeProject } from "../src/commands/init.js";
-import { runFormalProject } from "../src/core/run.js";
+import { controlPlaneCommitRecords, runFormalProject } from "../src/core/run.js";
 import { verifyReplay } from "../src/commands/replay.js";
+import { previewProject } from "../src/commands/preview.js";
+import { scheduleReadiness } from "../src/commands/schedule.js";
 import { FixtureModelProvider } from "../src/providers/fixture.js";
 import { loadEffectiveConfig } from "../src/config/load.js";
 import type { LarkRunner } from "../src/control-plane/lark-cli.js";
 import { SqliteStateStore } from "../src/state/sqlite.js";
+import { renderFormalDaily, validateFormalArtifact } from "../src/outputs/formal-markdown.js";
+
+beforeAll(() => vi.stubEnv("BRIEFWRIGHT_LOCALE", "zh-CN"));
+afterAll(() => vi.unstubAllEnvs());
 
 function sourceResponse(url: string): Response {
   if (url.includes("api.github.com")) {
+    const repository = /\/repos\/([^/]+\/[^/]+)\/releases/.exec(url)?.[1] ?? "QwenLM/qwen-code";
     return new Response(JSON.stringify([{
       id: 10,
-      html_url: "https://github.com/QwenLM/qwen-code/releases/tag/v1.2.3",
+      html_url: `https://github.com/${repository}/releases/tag/v1.2.3`,
       name: "Agent runtime v1.2.3",
       tag_name: "v1.2.3",
       body: "AI agents gain an explicit tool budget and evidence checkpoint.",
@@ -37,6 +44,138 @@ function sourceResponse(url: string): Response {
 }
 
 describe("formal run", () => {
+  it("includes phase-A audit events in the phase-B control-plane commit", () => {
+    const records = [
+      { kind: "runs" as const, id: "RUN-1", payload: { status: "success" }, links: { events: ["EVT-OLD", "EVT-RECONCILED"] } },
+      { kind: "events" as const, id: "EVT-OLD", payload: { event_type: "stage.complete" } },
+      { kind: "events" as const, id: "EVT-RECONCILED", payload: { event_type: "control-plane.reconciled" } },
+      { kind: "events" as const, id: "EVT-OTHER", payload: { event_type: "unrelated" } },
+      { kind: "items" as const, id: "AI-OTHER", payload: {} },
+    ];
+    expect(controlPlaneCommitRecords(records, "RUN-1").map((record) => record.id)).toEqual(["RUN-1", "EVT-OLD", "EVT-RECONCILED"]);
+  });
+
+  it("publishes a validated Computer Use source without falling back to HTTP", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-formal-computer-use-"));
+    const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
+    await ejectConfiguration(configPath);
+    const sourcesDirectory = path.join(root, "briefwright.d/sources");
+    const files = await readdir(sourcesDirectory);
+    let selectedSourceId = "";
+    for (const name of files) {
+      const file = path.join(sourcesDirectory, name);
+      const resource = parse(await readFile(file, "utf8")) as { metadata: { id: string }; spec: Record<string, unknown> };
+      if (!selectedSourceId) {
+        selectedSourceId = resource.metadata.id;
+        resource.spec.title = "Dynamic official agent release";
+        resource.spec.evidenceTier = "primary";
+        resource.spec.priority = 100;
+        resource.spec.connector = { type: "computer-use", config: { url: "https://docs.example.com/releases", allowedHosts: ["docs.example.com"] } };
+      } else resource.spec.enabled = false;
+      await writeFile(file, stringify(resource), "utf8");
+    }
+    const inbox = path.join(root, ".briefwright/inbox");
+    await mkdir(inbox, { recursive: true });
+    const bundle = path.join(inbox, "external-2026-08-19.json");
+    await writeFile(bundle, JSON.stringify({
+      apiVersion: "briefwright.dev/external-captures/v1",
+      generatedAt: "2026-08-19T02:00:00Z",
+      sources: [{
+        sourceId: selectedSourceId,
+        status: "captured",
+        captureMode: "computer-use",
+        captures: [{
+          url: "https://docs.example.com/releases/agent-v2",
+          title: "AI agents gain governed Computer Use capture",
+          text: "AI agents gain governed Computer Use capture with exact source and evidence boundaries.",
+          publishedAt: "2026-08-19T01:00:00Z",
+          dateKind: "event",
+        }],
+      }],
+    }));
+    const result = await runFormalProject(configPath, {
+      now: new Date("2026-08-19T03:00:00Z"),
+      captureBundlePath: bundle,
+      provider: new FixtureModelProvider(),
+      fetch: async () => { throw new Error("Computer Use source must not fall back to HTTP"); },
+    });
+    expect(result).toMatchObject({ outcome: "success", publicationState: "published" });
+    expect(result.result.receipts).toEqual([expect.objectContaining({ sourceId: selectedSourceId, result: "updated", detail: expect.stringContaining("external captures") })]);
+    expect(result.result.daily).toHaveLength(1);
+    expect(await readFile(result.dailyPath, "utf8")).toContain("AI agents gain governed Computer Use capture");
+  }, 60_000);
+
+  it("keeps a bundle-only editorial shadow isolated from every configured source not listed in the bundle", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-bundle-only-"));
+    const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
+    await ejectConfiguration(configPath);
+    const sourcesDirectory = path.join(root, "briefwright.d/sources");
+    const files = await readdir(sourcesDirectory);
+    const selectedFile = path.join(sourcesDirectory, files[0]!);
+    const resource = parse(await readFile(selectedFile, "utf8")) as { metadata: { id: string }; spec: Record<string, unknown> };
+    resource.spec.title = "Dynamic official agent release";
+    resource.spec.evidenceTier = "primary";
+    resource.spec.priority = 100;
+    resource.spec.connector = { type: "computer-use", config: { url: "https://docs.example.com/releases", allowedHosts: ["docs.example.com"] } };
+    await writeFile(selectedFile, stringify(resource), "utf8");
+
+    const inbox = path.join(root, ".briefwright/inbox");
+    await mkdir(inbox, { recursive: true });
+    const bundle = path.join(inbox, "bundle-only.json");
+    const now = new Date().toISOString();
+    await writeFile(bundle, JSON.stringify({
+      apiVersion: "briefwright.dev/external-captures/v1",
+      generatedAt: now,
+      sources: [{
+        sourceId: resource.metadata.id,
+        status: "captured",
+        captureMode: "computer-use",
+        captures: [{
+          url: "https://docs.example.com/releases/agent-v2",
+          title: "AI agents gain governed Computer Use capture",
+          text: "AI agents gain governed Computer Use capture with exact source and evidence boundaries.",
+          publishedAt: now,
+          dateKind: "event",
+        }],
+      }],
+    }));
+    const result = await previewProject(configPath, {
+      live: true,
+      editorial: true,
+      bundleOnly: true,
+      captureBundlePath: bundle,
+      provider: new FixtureModelProvider(),
+      fetch: async () => { throw new Error("A bundle-only shadow must not fetch unlisted sources"); },
+    });
+    expect(result).toMatchObject({ previewScope: "capture-bundle", receiptCount: 1, selected: { daily: 1, review: 0, machineOnly: 0 } });
+    expect(await readFile(result.outputPath, "utf8")).toContain("Bundle-only scope");
+    await expect(previewProject(configPath, { live: true, editorial: true, historicalBundle: true, captureBundlePath: bundle }))
+      .rejects.toThrow("Historical bundles are allowed only");
+    await expect(scheduleReadiness(configPath, { preflight: async () => [] })).rejects.toThrow("editorial shadow");
+  }, 60_000);
+
+  it("replays formal artifacts from a configured Obsidian document root outside the project", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-replay-project-"));
+    const vault = await mkdtemp(path.join(tmpdir(), "briefwright-replay-vault-"));
+    const configPath = await initializeProject({
+      directory: root,
+      yes: true,
+      interests: ["AI agents"],
+      documentStore: { driver: "obsidian", root: vault, briefingDirectory: "Inbox/AI Intelligence" },
+    });
+    const result = await runFormalProject(configPath, {
+      now: new Date("2026-08-11T02:00:00Z"),
+      provider: new FixtureModelProvider(),
+      fetch: async (url) => sourceResponse(String(url)),
+    });
+
+    expect(result.dailyPath.startsWith(vault)).toBe(true);
+    await expect(verifyReplay(configPath, result.runId)).resolves.toMatchObject({
+      matches: true,
+      artifacts: [{ kind: "daily-markdown" }, { kind: "review-markdown" }],
+    });
+  }, 60_000);
+
   it("freezes, captures, analyzes, selects, publishes, and is idempotent within the day", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-formal-"));
     const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
@@ -52,12 +191,44 @@ describe("formal run", () => {
     expect(first.outcome).toBe("success");
     expect(first.result.receipts).toHaveLength(8);
     expect(first.result.daily.length).toBeGreaterThan(0);
+    expect(first.result.readerFormatVersion).toBe(2);
     const dailyArtifact = await readFile(first.dailyPath, "utf8");
-    expect(dailyArtifact).toContain("RULE-WORKFLOW-V1.3");
+    expect(dailyArtifact).toContain("contract_digest:");
     expect(dailyArtifact).toContain("source_manifest_digest:");
-    expect(dailyArtifact).toContain("## Stage timings before publish");
-    expect(dailyArtifact).toContain("Three-sentence summary:");
-    expect(dailyArtifact).toContain("- Content hash:");
+    expect(dailyArtifact).toContain("reader_format_version: 2");
+    expect(dailyArtifact).not.toContain("## 发布前阶段耗时");
+    expect(dailyArtifact).not.toContain("## 运行摘要");
+    expect(dailyArtifact).not.toContain("## 来源失败");
+    expect(dailyArtifact).not.toContain("## 模型失败");
+    expect(dailyArtifact).not.toContain("## 完成与存储校验");
+    expect(dailyArtifact).toContain("首要跟进");
+    expect(dailyArtifact).toContain("没有足够证据形成跨领域判断");
+    expect(dailyArtifact).not.toContain("仅保留条目中有直接证据支持的影响说明");
+    expect(dailyArtifact).toContain("### 为什么重要");
+    expect(dailyArtifact).toContain("- 来源日期：");
+    expect(dailyArtifact).not.toContain("- 发布时间：");
+    expect(dailyArtifact).not.toContain("- 内容哈希：");
+    expect(dailyArtifact).not.toContain("- 评分维度：");
+    expect(dailyArtifact.split("\n").length).toBeLessThan(100);
+    expect(dailyArtifact).not.toContain("## Run summary");
+    expect(dailyArtifact).not.toContain("## Source failures");
+    const effective = await loadEffectiveConfig(configPath);
+    const englishArtifact = renderFormalDaily(effective, first.result, "en");
+    expect(englishArtifact).not.toContain("## Run summary");
+    expect(englishArtifact).not.toContain("## Source failures");
+    expect(englishArtifact).toContain("### Why it matters");
+    expect(englishArtifact).toContain("Top priority:");
+    expect(englishArtifact).toContain("not enough evidence for a cross-domain assessment");
+    expect(englishArtifact).not.toContain("首要跟进");
+    expect(englishArtifact).toContain("- Source date: ");
+    expect(englishArtifact).not.toContain("## 运行摘要");
+    expect(() => validateFormalArtifact(effective, first.result, "daily", englishArtifact)).not.toThrow();
+    const firstDaily = first.result.daily[0]!;
+    const multiDomainArtifact = renderFormalDaily(effective, { ...first.result, daily: [firstDaily, { ...firstDaily,
+      id: `${firstDaily.id}-SYSTEM`, title: "Runtime dependency floor changes", domain: "系统与工程", score: firstDaily.score - 1 }] }, "en");
+    expect(multiDomainArtifact).toContain("- Agent:");
+    expect(multiDomainArtifact).toContain("- 系统与工程:");
+    expect(multiDomainArtifact).toContain("strongest verified signals in each domain");
     expect(await readFile(first.reviewPath, "utf8")).toContain("队列未被填充");
     expect(await readFile(path.join(path.dirname(path.dirname(first.dailyPath)), "Note-AI情报候选池.md"), "utf8")).toContain("<!-- ai-intelligence-digest:start -->");
     await expect(verifyReplay(configPath, first.runId)).resolves.toMatchObject({
@@ -74,7 +245,15 @@ describe("formal run", () => {
     expect(fetchCount).toBe(8);
     const config = await loadEffectiveConfig(configPath); const state = new SqliteStateStore(config.storage.path, config.projectRoot);
     const modelPerformance = (state.diagnoseImprovements(new Date("2026-08-11T03:00:00Z"), 30, config.policy.domains).metrics.modelPerformance) as { averageDurationMs: number; unknownCostObservations: number };
-    state.close(); expect(modelPerformance.averageDurationMs).toBeGreaterThanOrEqual(0); expect(modelPerformance.unknownCostObservations).toBeGreaterThan(0);
+    const controlRecords = state.controlRecords(config, first.runId);
+    const controlEvents = controlRecords.filter((record) => record.kind === "events");
+    const selectedIds = new Set([...first.result.daily, ...first.result.review].map((item) => item.id));
+    const itemControlEvents = controlEvents.filter((record) => record.payload.entity_type === "item");
+    state.close();
+    expect(modelPerformance.averageDurationMs).toBeGreaterThanOrEqual(0); expect(modelPerformance.unknownCostObservations).toBeGreaterThan(0);
+    expect(itemControlEvents).toHaveLength(selectedIds.size);
+    expect(itemControlEvents.every((record) => selectedIds.has(String(record.payload.entity_id))
+      && ["已生成简报", "人工复核"].includes(JSON.parse(String(record.payload.payload_json)).toState))).toBe(true);
   }, 60_000);
 
   it("resumes an interrupted run from durable receipts without fetching sources again", async () => {
@@ -92,7 +271,20 @@ describe("formal run", () => {
     expect(resumed.result.receipts).toHaveLength(8);
   }, 60_000);
 
-  it("records model failures as a partial terminal outcome in both artifacts", async () => {
+  it("fails closed on legacy finalizing runs that already exposed pre-commit artifacts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-legacy-finalizing-"));
+    const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
+    const first = await runFormalProject(configPath, { now: new Date("2026-08-11T02:00:00Z"), provider: new FixtureModelProvider(), fetch: async (url) => sourceResponse(String(url)) });
+    const config = await loadEffectiveConfig(configPath); const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+    const legacy = structuredClone(first.result); delete legacy.publicationState; delete legacy.integrityManifest;
+    state.database.prepare("UPDATE runs SET status='finalizing',completed_at=NULL,current_stage='complete',result_json=? WHERE run_id=?").run(JSON.stringify(legacy), first.runId);
+    state.close();
+    await expect(runFormalProject(configPath, { now: new Date("2026-08-11T03:00:00Z"), provider: new FixtureModelProvider(), fetch: async () => { throw new Error("legacy finalizing must not fetch"); } }))
+      .rejects.toThrow("pre-commit artifacts");
+    expect(await readFile(first.dailyPath, "utf8")).toContain(`run_id: ${first.runId}`);
+  }, 60_000);
+
+  it("withholds documents when model failures leave no usable briefing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-model-failure-"));
     const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
     const failed = await runFormalProject(configPath, {
@@ -105,22 +297,68 @@ describe("formal run", () => {
       },
       fetch: async (url) => sourceResponse(String(url)),
     });
-    expect(failed.outcome).toBe("partial");
-    expect(failed.result.outcome).toBe("partial");
+    expect(failed.outcome).toBe("failed");
+    expect(failed.publicationState).toBe("withheld");
+    expect(failed.result.outcome).toBe("failed");
     expect(failed.result.modelFailures?.length).toBeGreaterThan(0);
-    expect(await readFile(failed.dailyPath, "utf8")).toContain("status: partial");
-    expect(await readFile(failed.reviewPath, "utf8")).toContain("- Outcome: partial");
+    await expect(readFile(failed.dailyPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(failed.reviewPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     const recovered = await runFormalProject(configPath, {
-      now: new Date("2026-08-13T04:00:00Z"),
+      now: new Date("2026-08-14T04:00:00Z"),
       retryFailed: true,
+      baseRunId: failed.runId,
       provider: new FixtureModelProvider(),
       fetch: async () => { throw new Error("model-only recovery must not refetch successful sources"); },
     });
     expect(recovered.runId).toBe("RUN-20260813-DAILY-R01");
     expect(recovered.result.runKind).toBe("formal-retry");
     expect(recovered.outcome).toBe("success");
-    expect(recovered.result.daily.length).toBeGreaterThan(0);
+    expect(recovered.result.daily.length + recovered.result.review.length).toBeGreaterThan(0);
     await expect(runFormalProject(configPath, { now: new Date("2026-08-13T05:00:00Z"), retryFailed: true, provider: new FixtureModelProvider() })).rejects.toThrow("no failed operations");
+  }, 60_000);
+
+  it("immutably refetches and promotes legacy primary items with anchored source evidence", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-reverify-"));
+    const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
+    const fixture = new FixtureModelProvider();
+    const base = await runFormalProject(configPath, {
+      now: new Date("2026-08-18T02:00:00Z"),
+      provider: {
+        id: "unanchored-fixture", version: "1.0.0", check: () => fixture.check(),
+        analyze: async (capture, context) => ({ ...(await fixture.analyze(capture, context)), claimEvidence: [{ claimIndex: 0, excerpt: "PROTECTED TRANSIENT ANCHOR THAT IS ABSENT" }] }),
+      },
+      fetch: async (url) => sourceResponse(String(url)),
+    });
+    expect(base.result.daily).toHaveLength(0);
+    expect(base.result.machineOnly?.every((item) => item.evidenceStatus === "unverified")).toBe(true);
+    const recovered = await runFormalProject(configPath, {
+      now: new Date("2026-08-18T03:00:00Z"), reverifyEvidence: true, provider: fixture,
+      fetch: async (url) => {
+        const value = String(url);
+        if (value.includes("api.github.com")) return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+        if (value.includes("export.arxiv.org")) return new Response("<rss><channel></channel></rss>", { status: 200, headers: { "content-type": "application/rss+xml" } });
+        return new Response("<html><title>Recovered canonical source</title><body>AI agents gain an explicit tool budget and evidence checkpoint. AI agents are evaluated with bounded evidence.</body></html>", { status: 200, headers: { "content-type": "text/html" } });
+      },
+    });
+    expect(recovered.runId).toBe("RUN-20260818-DAILY-R01");
+    expect(recovered.result.daily).toHaveLength(0);
+    expect(recovered.result.review).toHaveLength(0);
+    expect(recovered.result.machineOnly?.length).toBeGreaterThan(0);
+    expect(recovered.result.modelFailures).toHaveLength(0);
+    expect(recovered.result.machineOnly?.every((item) => item.evidenceStatus === "confirmed-primary" && item.exclusionReasons?.includes("recovery-only"))).toBe(true);
+    const config = await loadEffectiveConfig(configPath); const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+    const records = state.controlRecords(config, recovered.runId);
+    const stored = state.database.prepare("SELECT analysis_json FROM analysis_attempts WHERE run_id=?").all(recovered.runId) as Array<{ analysis_json: string }>;
+    const baseRows = state.database.prepare("SELECT item_id,run_id,evidence_status FROM items WHERE run_id=?").all(base.runId) as Array<{ item_id: string; run_id: string; evidence_status: string }>;
+    const recoveryRows = state.database.prepare("SELECT item_id FROM run_items WHERE run_id=?").all(recovered.runId) as Array<{ item_id: string }>;
+    const remainingTargets = state.evidenceReverificationTargets(base.runId);
+    state.close();
+    expect(records.filter((record) => record.kind === "items").length).toBeGreaterThan(0);
+    expect(stored.every((row) => !row.analysis_json.includes('"claimEvidence"') && row.analysis_json.includes('"_evidenceVerification"'))).toBe(true);
+    expect(baseRows.every((row) => row.run_id === base.runId && row.evidence_status === "unverified")).toBe(true);
+    expect(recoveryRows.length).toBeGreaterThan(0);
+    expect(recoveryRows.every((row) => !baseRows.some((baseRow) => baseRow.item_id === row.item_id))).toBe(true);
+    expect(remainingTargets).toEqual([]);
   }, 60_000);
 
   it("persists one auditable failed capture per failed source without analyzing it", async () => {
@@ -157,7 +395,8 @@ describe("formal run", () => {
       fetch: async (url) => sourceResponse(String(url)),
     });
     expect(first.outcome).toBe("partial");
-    expect(first.result.modelFailures).toContainEqual(expect.objectContaining({ detail: expect.stringContaining("deferred") }));
+    expect(first.result.modelFailures).toEqual([]);
+    expect(first.result.analysisBacklog).toContainEqual(expect.objectContaining({ count: expect.any(Number) }));
     const recovery = await runFormalProject(configPath, {
       now: new Date("2026-08-14T03:00:00Z"),
       retryFailed: true,
@@ -168,7 +407,7 @@ describe("formal run", () => {
     expect(recovery.outcome).toBe("partial");
   }, 60_000);
 
-  it("finalizes both Markdown and the journal as partial when Lark synchronization fails", async () => {
+  it("fails closed and withholds Markdown when Lark synchronization fails", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-lark-partial-"));
     const tableIds = { sources: "tbl_sources", runs: "tbl_runs", items: "tbl_items", events: "tbl_events", feedback: "tbl_feedback", experiments: "tbl_experiments", captures: "tbl_captures", rules: "tbl_rules", receipts: "tbl_receipts" };
     const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"], processStore: { driver: "lark", baseToken: "base", tables: tableIds } });
@@ -184,9 +423,19 @@ describe("formal run", () => {
       throw new Error(`unexpected call ${args.join(" ")}`);
     };
     const result = await runFormalProject(configPath, { now: new Date("2026-08-15T02:00:00Z"), provider: new FixtureModelProvider(), fetch: async (url) => sourceResponse(String(url)), larkRunner: runner });
-    expect(result.outcome).toBe("partial"); expect(result.result.completionReport?.processStoreValid).toBe(false);
-    const daily = await readFile(result.dailyPath, "utf8");
-    expect(daily).toContain("status: partial"); expect(daily).toContain("- Process store valid: false");
-    await expect(verifyReplay(configPath, result.runId)).resolves.toMatchObject({ matches: true });
+    expect(result.outcome).toBe("failed");
+    expect(result.publicationState).toBe("withheld");
+    expect(result.result.completionReport).toMatchObject({ processStoreValid: false, documentStoreValid: false });
+    await expect(readFile(result.dailyPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(result.reviewPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+    const frozenConfig = JSON.parse((state.database.prepare(`SELECT config_snapshots.config_json FROM runs JOIN config_snapshots
+      ON config_snapshots.digest=runs.config_digest WHERE runs.run_id=?`).get(result.runId) as { config_json: string }).config_json) as typeof config;
+    expect(state.runArtifacts(result.runId)).toHaveLength(0);
+    expect(state.retryContext(result.runId, frozenConfig)).toMatchObject({ runId: result.runId, parentRunId: result.runId, forcedSourceIds: [], resumed: true });
+    expect(state.resumeWithheldControlPlaneRun(result.runId, "2026-08-15T03:00:00Z")).toBe("resumed");
+    expect(state.runRecord(result.runId)).toMatchObject({ status: "finalizing", result: expect.objectContaining({ publicationState: "withheld" }) });
+    expect(state.runArtifacts(result.runId)).toHaveLength(0);
+    state.close();
   }, 60_000);
 });

@@ -11,6 +11,7 @@ export interface ProjectStatus {
   nativeSchedule: Awaited<ReturnType<typeof inspectNativeSchedule>> | null;
   schedule: ReturnType<SqliteStateStore["activeSchedule"]>;
   latestRun: ReturnType<SqliteStateStore["latestRun"]>;
+  recoveries: ReturnType<SqliteStateStore["recoverableRuns"]>;
   statePath: string;
 }
 
@@ -20,7 +21,7 @@ export async function projectStatus(configPath: string): Promise<ProjectStatus> 
     await access(config.storage.path);
   } catch {
     const nativeSchedule = await inspectNativeSchedule(scheduleIdentifier(config.projectRoot));
-    return { scheduleEnabled: nativeSchedule.active, scheduleInSync: !nativeSchedule.active, nativeSchedule, schedule: null, latestRun: null, statePath: config.storage.path };
+    return { scheduleEnabled: nativeSchedule.active, scheduleInSync: !nativeSchedule.active, nativeSchedule, schedule: null, latestRun: null, recoveries: [], statePath: config.storage.path };
   }
 
   const state = new SqliteStateStore(config.storage.path, config.projectRoot);
@@ -33,6 +34,7 @@ export async function projectStatus(configPath: string): Promise<ProjectStatus> 
       nativeSchedule,
       schedule,
       latestRun: state.latestRun(),
+      recoveries: state.recoverableRuns(),
       statePath: config.storage.path,
     };
   } finally {

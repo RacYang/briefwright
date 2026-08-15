@@ -6,11 +6,13 @@ import { canonicalJson, configDigest } from "../config/load.js";
 import type { EffectiveConfig } from "../config/types.js";
 import type { PolicyDefinition } from "../config/types.js";
 import type { RunResult } from "../core/types.js";
+import type { FormalRunOutcome } from "../core/accounting.js";
 import type { BriefingItem, Receipt } from "../core/types.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
+import { normalizeExternalKey, normalizeScalarText } from "../connectors/scalars.js";
 import type { CanonicalControlRecord } from "../control-plane/types.js";
 import { countReceipts, runOutcome } from "../core/accounting.js";
-import { replayCandidateUnderPolicy, selectCandidatesUnderPolicy } from "../core/selection.js";
+import { canonicalEventIdentity, replayCandidateUnderPolicy, selectCandidatesUnderPolicy } from "../core/selection.js";
 import { databaseMigrationStatus, migrateDatabase } from "./migrations.js";
 import type { FeedbackType } from "../commands/feedback.js";
 
@@ -51,16 +53,169 @@ export class SqliteStateStore {
     return (this.database.prepare("SELECT kind,path,content_hash FROM output_artifacts WHERE run_id=? ORDER BY kind").all(runId) as Array<{ kind: string; path: string; content_hash: string }>).map((row) => ({ kind: row.kind, path: row.path, contentHash: row.content_hash }));
   }
 
+  private isLegacyRunIsolated(runId: string, result?: RunResult | null): boolean {
+    if (result?.legacyQuarantine) return true;
+    return Boolean(this.database.prepare("SELECT 1 FROM events WHERE run_id=? AND event_type='run.legacy-zombie-abandoned' LIMIT 1").get(runId));
+  }
+
+  runRecoveryStatus(runId: string, now = new Date()): {
+    runId: string;
+    storedStatus: string;
+    effectiveStatus: string;
+    currentStage: string;
+    lastActivityAt: string | null;
+    publicationState: RunResult["publicationState"] | null;
+    recoveryAction: "none" | "wait-active" | "resume-execution" | "resume-finalization" | "quarantine-legacy-artifacts" | "retry-failed";
+    counts: { receipts: number; captures: number; analyses: number; artifacts: number };
+  } {
+    const row = this.database.prepare("SELECT status,current_stage,result_json FROM runs WHERE run_id=?").get(runId) as { status: string; current_stage: string; result_json: string | null } | undefined;
+    if (!row) throw new Error(`Run not found: ${runId}`);
+    const result = row.result_json ? JSON.parse(row.result_json) as RunResult : null;
+    const lastActivityAt = this.latestRunActivity(runId);
+    const stale = ["running", "finalizing"].includes(row.status) && Boolean(lastActivityAt && now.getTime() - new Date(lastActivityAt).getTime() >= 30 * 60_000);
+    const counts = {
+      receipts: Number((this.database.prepare("SELECT COUNT(*) count FROM receipts WHERE run_id=?").get(runId) as { count: number }).count),
+      captures: Number((this.database.prepare("SELECT COUNT(*) count FROM captures WHERE run_id=?").get(runId) as { count: number }).count),
+      analyses: Number((this.database.prepare("SELECT COUNT(*) count FROM analysis_attempts WHERE run_id=?").get(runId) as { count: number }).count),
+      artifacts: Number((this.database.prepare("SELECT COUNT(*) count FROM output_artifacts WHERE run_id=?").get(runId) as { count: number }).count),
+    };
+    const isolated = this.isLegacyRunIsolated(runId, result);
+    let recoveryAction: "none" | "wait-active" | "resume-execution" | "resume-finalization" | "quarantine-legacy-artifacts" | "retry-failed" = "none";
+    if (isolated) recoveryAction = "none";
+    else if (["running", "finalizing"].includes(row.status) && !stale) recoveryAction = "wait-active";
+    else if ((row.status === "finalizing" || (row.status === "abandoned" && result)) && result && counts.artifacts > 0 && (!result.publicationState || !result.integrityManifest)) recoveryAction = "quarantine-legacy-artifacts";
+    else if ((row.status === "finalizing" || (row.status === "abandoned" && result)) && result) recoveryAction = "resume-finalization";
+    else if (["running", "abandoned"].includes(row.status) && !result) recoveryAction = "resume-execution";
+    else if (row.status === "failed") recoveryAction = "retry-failed";
+    return { runId, storedStatus: row.status, effectiveStatus: stale ? "abandoned" : row.status, currentStage: row.current_stage,
+      lastActivityAt, publicationState: result?.publicationState ?? null, recoveryAction, counts };
+  }
+
+  recoverableRuns(now = new Date()): Array<ReturnType<SqliteStateStore["runRecoveryStatus"]>> {
+    const runIds = (this.database.prepare(`SELECT run_id FROM runs
+      WHERE run_kind IN ('formal','formal-retry') AND status IN ('running','finalizing','abandoned')
+      ORDER BY generated_at,run_id`).all() as Array<{ run_id: string }>).map((row) => row.run_id);
+    return runIds.map((runId) => this.runRecoveryStatus(runId, now)).filter((status) => status.recoveryAction !== "none");
+  }
+
   failFormalRun(runId: string, now: string, stage: string, detail: string): void {
     this.database.prepare("UPDATE runs SET status='failed',completed_at=?,current_stage=? WHERE run_id=?").run(now, stage, runId);
     this.appendEvent(runId, now, stage, "run.failed", "run", runId, `${runId}:terminal:failed`, { detail });
   }
 
+  abandonFormalRun(runId: string, now: string, detail: string): void {
+    const changed = this.database.prepare("UPDATE runs SET status='abandoned',completed_at=NULL WHERE run_id=? AND status IN ('running','finalizing')").run(runId);
+    if (changed.changes) this.appendEvent(runId, now, "recovery", "run.abandoned", "run", runId, `${runId}:abandoned:${now}`, { detail });
+  }
+
+  quarantineLegacyRunState(input: {
+    runId: string;
+    now: string;
+    reason: string;
+    manifestPath: string;
+    expectedArtifacts: Array<{ kind: string; path: string; contentHash: string }>;
+  }): "abandoned" | "quarantined" | "unchanged" {
+    const row = this.database.prepare("SELECT status,result_json FROM runs WHERE run_id=?").get(input.runId) as
+      { status: string; result_json: string | null } | undefined;
+    if (!row) throw new Error(`Run not found: ${input.runId}`);
+    const result = row.result_json ? JSON.parse(row.result_json) as RunResult : null;
+    const actualArtifacts = this.runArtifacts(input.runId);
+    const normalized = (artifacts: typeof actualArtifacts) => [...artifacts].sort((left, right) => `${left.kind}\n${left.path}\n${left.contentHash}`.localeCompare(`${right.kind}\n${right.path}\n${right.contentHash}`));
+    if (JSON.stringify(normalized(actualArtifacts)) !== JSON.stringify(normalized(input.expectedArtifacts))) {
+      throw new Error(`Run ${input.runId} artifacts changed after quarantine preview; rerun the preview`);
+    }
+    if (result?.publicationState === "published") throw new Error(`Published run ${input.runId} cannot be quarantined`);
+    if (["success", "empty"].includes(row.status)) throw new Error(`Terminal ${row.status} run ${input.runId} cannot be quarantined`);
+
+    if (!result && actualArtifacts.length === 0) {
+      if (row.status === "abandoned") return "unchanged";
+      if (!["running", "finalizing"].includes(row.status)) throw new Error(`Run ${input.runId} has no quarantinable legacy state`);
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        const updated = this.database.prepare("UPDATE runs SET status='abandoned',completed_at=?,current_stage='recovery' WHERE run_id=? AND status IN ('running','finalizing')")
+          .run(input.now, input.runId);
+        if (updated.changes !== 1) throw new Error(`Run ${input.runId} changed during quarantine`);
+        this.appendEvent(input.runId, input.now, "recovery", "run.legacy-zombie-abandoned", "run", input.runId,
+          `${input.runId}:legacy-zombie-abandoned`, { reason: input.reason, manifestPath: input.manifestPath });
+        this.database.exec("COMMIT");
+        return "abandoned";
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+
+    if (!result || actualArtifacts.length === 0) {
+      if (result?.legacyQuarantine) return "unchanged";
+      throw new Error(`Run ${input.runId} has no recorded legacy artifacts to quarantine`);
+    }
+    if (!["failed", "partial", "finalizing", "abandoned"].includes(row.status)) {
+      throw new Error(`Run ${input.runId} status ${row.status} cannot be quarantined`);
+    }
+    const quarantined: RunResult = {
+      ...result,
+      outcome: "failed",
+      publicationState: "withheld",
+      integrityValidated: false,
+      ...(result.completionReport ? { completionReport: {
+        ...result.completionReport,
+        processStoreValid: false,
+        documentStoreValid: false,
+      } } : {}),
+      legacyQuarantine: {
+        quarantinedAt: input.now,
+        manifestPath: input.manifestPath,
+        reason: input.reason,
+        artifactCount: actualArtifacts.length,
+      },
+    };
+    delete quarantined.artifactPaths;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM output_artifacts WHERE run_id=?").run(input.runId);
+      const updated = this.database.prepare("UPDATE runs SET status='failed',result_json=?,completed_at=?,current_stage='complete' WHERE run_id=?")
+        .run(JSON.stringify(quarantined), input.now, input.runId);
+      if (updated.changes !== 1) throw new Error(`Run ${input.runId} changed during quarantine`);
+      this.appendEvent(input.runId, input.now, "recovery", "run.legacy-artifacts-quarantined", "run", input.runId,
+        `${input.runId}:legacy-artifacts-quarantined`, { reason: input.reason, manifestPath: input.manifestPath, artifacts: actualArtifacts });
+      this.database.exec("COMMIT");
+      return "quarantined";
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private latestRunActivity(runId: string): string | null {
+    const row = this.database.prepare(`SELECT MAX(value) value FROM (
+      SELECT generated_at value FROM runs WHERE run_id=? UNION ALL
+      SELECT started_at FROM execution_stages WHERE run_id=? UNION ALL
+      SELECT completed_at FROM execution_stages WHERE run_id=? UNION ALL
+      SELECT attempted_at FROM receipts WHERE run_id=? UNION ALL
+      SELECT captured_at FROM captures WHERE run_id=? UNION ALL
+      SELECT attempted_at FROM analysis_attempts WHERE run_id=? UNION ALL
+      SELECT occurred_at FROM events WHERE run_id=?)`).get(runId, runId, runId, runId, runId, runId, runId) as { value: string | null };
+    return row.value;
+  }
+
   beginFormalRun(config: EffectiveConfig, runId: string, now: string, executionPlan: unknown, parentRunId?: string): "created" | "resumed" | "complete" {
     const existing = this.runRecord(runId);
     if (existing) {
-      if (existing.configDigest !== configDigest(config)) throw new Error(`Run ${runId} already exists with a different configuration digest`);
-      if (["success", "partial", "failed"].includes(existing.status) && existing.result) return "complete";
+      if (!this.runUsesExecutionConfig(runId, existing.configDigest, config)) throw new Error(`Run ${runId} already exists with a different configuration digest`);
+      if (this.isLegacyRunIsolated(runId, existing.result)) throw new Error(`Run ${runId} was explicitly quarantined and cannot be resumed`);
+      if (["success", "partial", "empty", "failed"].includes(existing.status) && existing.result) return "complete";
+      const activity = this.latestRunActivity(runId);
+      const resumableFailure = existing.status === "failed" && existing.result === null;
+      if (existing.status !== "abandoned" && !resumableFailure && activity && new Date(now).getTime() - new Date(activity).getTime() < 30 * 60_000) {
+        throw new Error(`Run ${runId} has recent activity at ${activity}; refusing a concurrent writer`);
+      }
+      if (existing.status !== "abandoned") {
+        if (resumableFailure) this.database.prepare("UPDATE runs SET status='abandoned',completed_at=NULL WHERE run_id=?").run(runId);
+        else this.abandonFormalRun(runId, now, `No activity since ${activity ?? "unknown"}`);
+      }
+      const resumedStatus = existing.result ? "finalizing" : "running";
+      this.database.prepare("UPDATE runs SET status=?,completed_at=NULL WHERE run_id=? AND status='abandoned'").run(resumedStatus, runId);
+      this.appendEvent(runId, now, "recovery", "run.resumed", "run", runId, `${runId}:resumed:${now}`, { previousActivityAt: activity });
       return "resumed";
     }
     const digest = configDigest(config);
@@ -86,20 +241,138 @@ export class SqliteStateStore {
     }
   }
 
-  retryContext(baseRunId: string, digest: string): { runId: string; parentRunId: string; forcedSourceIds: string[]; resumed: boolean } {
-    const rows = this.database.prepare(`SELECT run_id,status,config_digest,result_json FROM runs
-      WHERE run_id=? OR run_id LIKE ? ORDER BY run_id DESC`).all(baseRunId, `${baseRunId}-R%`) as Array<{ run_id: string; status: string; config_digest: string; result_json: string | null }>;
+  retryContext(baseRunId: string, config: EffectiveConfig): { runId: string; parentRunId: string; forcedSourceIds: string[]; resumed: boolean } {
+    const rows = this.database.prepare(`SELECT runs.run_id,runs.status,runs.config_digest,runs.result_json,config_snapshots.config_json
+      FROM runs JOIN config_snapshots ON config_snapshots.digest=runs.config_digest
+      WHERE runs.run_id=? OR runs.run_id LIKE ? ORDER BY runs.run_id DESC`).all(baseRunId, `${baseRunId}-R%`) as Array<{ run_id: string; status: string; config_digest: string; result_json: string | null; config_json: string }>;
     if (!rows.length) throw new Error(`No formal run exists to retry for ${baseRunId}`);
     const latest = rows[0]!;
-    if (latest.config_digest !== digest) throw new Error(`The failed run ${latest.run_id} used a different configuration. Restore that configuration or wait for a new scheduled batch.`);
-    if (!["success", "partial", "failed"].includes(latest.status) || !latest.result_json) {
+    const latestResult = latest.result_json ? JSON.parse(latest.result_json) as RunResult : null;
+    if (this.isLegacyRunIsolated(latest.run_id, latestResult)) throw new Error(`Lineage ending at ${latest.run_id} was explicitly quarantined and cannot be retried`);
+    if (!this.snapshotUsesExecutionConfig(latest.config_digest, latest.config_json, config)) throw new Error(`The failed run ${latest.run_id} used a different configuration. Restore that configuration or wait for a new scheduled batch.`);
+    if (!["success", "partial", "empty", "failed"].includes(latest.status) || !latest.result_json) {
       return { runId: latest.run_id, parentRunId: latest.run_id === baseRunId ? baseRunId : (this.database.prepare("SELECT parent_run_id FROM runs WHERE run_id=?").get(latest.run_id) as { parent_run_id: string }).parent_run_id, forcedSourceIds: this.dueSourceIds(latest.run_id), resumed: true };
     }
-    if (latest.status === "success") throw new Error(`Run ${latest.run_id} succeeded; there are no failed operations to retry`);
-    const result = JSON.parse(latest.result_json) as RunResult;
+    if (["success", "empty"].includes(latest.status)) throw new Error(`Run ${latest.run_id} has no failed operations to retry`);
+    const result = latestResult!;
     const failedSourceIds = result.receipts.filter((receipt) => receipt.result === "failed" || receipt.result === "skipped").map((receipt) => receipt.sourceId);
+    const selectedCount = result.daily.length + result.review.length;
+    const backlogCount = result.analysisBacklog?.reduce((sum, entry) => sum + entry.count, 0) ?? 0;
+    const usableContent = selectedCount > 0 || ((result.modelFailures?.length ?? 0) + backlogCount === 0);
+    const controlPlaneOnlyFailure = latest.status === "failed" && result.publicationState === "withheld" && usableContent && failedSourceIds.length === 0
+      && result.completionReport?.processStoreValid === false
+      && (result.controlPlaneSync?.acknowledged === false || result.controlPlaneReconciliation?.acknowledged === false || result.controlPlaneCommit?.acknowledged === false);
+    if (controlPlaneOnlyFailure) {
+      const parentRunId = latest.run_id === baseRunId ? baseRunId : String((this.database.prepare("SELECT parent_run_id FROM runs WHERE run_id=?").get(latest.run_id) as { parent_run_id: string | null }).parent_run_id ?? baseRunId);
+      return { runId: latest.run_id, parentRunId, forcedSourceIds: [], resumed: true };
+    }
     const ordinal = rows.filter((row) => row.run_id !== baseRunId).length + 1;
     return { runId: `${baseRunId}-R${String(ordinal).padStart(2, "0")}`, parentRunId: latest.run_id, forcedSourceIds: failedSourceIds, resumed: false };
+  }
+
+  resumeWithheldControlPlaneRun(runId: string, now = new Date().toISOString()): "resumed" {
+    const row = this.database.prepare("SELECT status,result_json FROM runs WHERE run_id=?").get(runId) as { status: string; result_json: string | null } | undefined;
+    if (!row || row.status !== "failed" || !row.result_json) throw new Error(`Run ${runId} is not a completed failed run`);
+    const result = JSON.parse(row.result_json) as RunResult;
+    if (this.isLegacyRunIsolated(runId, result)) throw new Error(`Run ${runId} was explicitly quarantined and cannot be resumed`);
+    if (result.publicationState !== "withheld" || result.completionReport?.processStoreValid !== false) {
+      throw new Error(`Run ${runId} is not withheld by a process-store failure`);
+    }
+    const artifactCount = Number((this.database.prepare("SELECT COUNT(*) count FROM output_artifacts WHERE run_id=?").get(runId) as { count: number }).count);
+    if (artifactCount !== 0) throw new Error(`Withheld run ${runId} already has formal artifacts and cannot be resumed automatically`);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const updated = this.database.prepare("UPDATE runs SET status='finalizing',completed_at=NULL,current_stage='persist' WHERE run_id=? AND status='failed'").run(runId);
+      if (updated.changes !== 1) throw new Error(`Run ${runId} could not enter finalization recovery`);
+      this.appendEvent(runId, now, "recovery", "run.control-plane-resumed", "run", runId, `${runId}:control-plane-resumed:${now}`, { publicationState: "withheld" });
+      this.database.exec("COMMIT");
+      return "resumed";
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  evidenceReverificationContext(baseRunId: string, config: EffectiveConfig): { runId: string; parentRunId: string; forcedSourceIds: string[]; resumed: boolean } {
+    const rows = this.database.prepare(`SELECT runs.run_id,runs.status,runs.config_digest,runs.result_json,runs.execution_plan_json,config_snapshots.config_json
+      FROM runs JOIN config_snapshots ON config_snapshots.digest=runs.config_digest
+      WHERE runs.run_id=? OR runs.run_id LIKE ? ORDER BY runs.run_id DESC`).all(baseRunId, `${baseRunId}-R%`) as Array<{
+        run_id: string; status: string; config_digest: string; result_json: string | null; execution_plan_json: string | null; config_json: string;
+      }>;
+    if (!rows.length) throw new Error(`No formal run exists to reverify for ${baseRunId}`);
+    const latest = rows[0]!;
+    const latestResult = latest.result_json ? JSON.parse(latest.result_json) as RunResult : null;
+    if (this.isLegacyRunIsolated(latest.run_id, latestResult)) throw new Error(`Lineage ending at ${latest.run_id} was explicitly quarantined and cannot be reverified`);
+    const snapshot = JSON.parse(latest.config_json) as EffectiveConfig;
+    const compatible = this.snapshotUsesExecutionConfig(latest.config_digest, latest.config_json, config) || (
+      snapshot.prompts.id === config.prompts.id && snapshot.prompts.version !== config.prompts.version && ["1.1.0", "1.2.0"].includes(config.prompts.version) &&
+      configDigest({ ...config, prompts: snapshot.prompts, provenance: { ...config.provenance, promptVersion: snapshot.provenance.promptVersion } }) === configDigest(snapshot)
+    );
+    if (!compatible) throw new Error(`The lineage ending at ${latest.run_id} used an incompatible configuration; evidence reverification only permits the anchored prompt migration`);
+    const plan = latest.execution_plan_json ? JSON.parse(latest.execution_plan_json) as { evidenceReverification?: boolean } : {};
+    if (!latest.result_json && plan.evidenceReverification === true) {
+      return { runId: latest.run_id, parentRunId: latest.run_id === baseRunId ? baseRunId : String((this.database.prepare("SELECT parent_run_id FROM runs WHERE run_id=?").get(latest.run_id) as { parent_run_id: string }).parent_run_id), forcedSourceIds: this.dueSourceIds(latest.run_id), resumed: true };
+    }
+    const targets = this.evidenceReverificationTargets(baseRunId);
+    if (!targets.length) throw new Error(`Run ${baseRunId} has no primary unverified items to reverify`);
+    const ordinal = rows.filter((row) => row.run_id !== baseRunId).length + 1;
+    return { runId: `${baseRunId}-R${String(ordinal).padStart(2, "0")}`, parentRunId: latest.run_id, forcedSourceIds: [...new Set(targets.map((target) => target.sourceId))].sort(), resumed: false };
+  }
+
+  evidenceReverificationTargets(baseRunId: string): Array<{ itemId: string; sourceId: string; contentHash: string }> {
+    return (this.database.prepare(`SELECT i.item_id,c.source_id,c.content_hash FROM items i JOIN captures c ON c.capture_id=i.capture_id
+      WHERE i.run_id=? AND i.evidence_status='unverified' AND c.evidence_class='primary'
+      AND NOT EXISTS (
+        SELECT 1 FROM captures recovered JOIN run_items ri ON ri.capture_id=recovered.capture_id
+        WHERE recovered.source_id=c.source_id
+          AND json_extract(recovered.raw_json,'$.recoveryOfContentHash')=c.content_hash
+          AND json_extract(ri.item_json,'$.evidenceStatus')='confirmed-primary'
+      ) ORDER BY c.source_id,i.item_id`).all(baseRunId) as Array<{
+        item_id: string; source_id: string; content_hash: string;
+      }>).map((row) => ({ itemId: row.item_id, sourceId: row.source_id, contentHash: row.content_hash }));
+  }
+
+  evidenceReverificationCaptures(baseRunId: string): CaptureEnvelope[] {
+    return (this.database.prepare(`SELECT c.raw_json FROM items i JOIN captures c ON c.capture_id=i.capture_id
+      WHERE i.run_id=? AND i.evidence_status='unverified' AND c.evidence_class='primary'
+      AND NOT EXISTS (
+        SELECT 1 FROM captures recovered JOIN run_items ri ON ri.capture_id=recovered.capture_id
+        WHERE recovered.source_id=c.source_id
+          AND json_extract(recovered.raw_json,'$.recoveryOfContentHash')=c.content_hash
+          AND json_extract(ri.item_json,'$.evidenceStatus')='confirmed-primary'
+      ) ORDER BY c.source_id,i.item_id`).all(baseRunId) as Array<{ raw_json: string }>)
+      .map((row) => JSON.parse(row.raw_json) as CaptureEnvelope);
+  }
+
+  retryControlRecords(config: EffectiveConfig, baseRunId: string): CanonicalControlRecord[] {
+    const rows = this.database.prepare(`SELECT run_id,result_json FROM runs
+      WHERE (run_id=? OR run_id LIKE ?) AND result_json IS NOT NULL ORDER BY run_id`).all(baseRunId, `${baseRunId}-R%`) as Array<{ run_id: string; result_json: string }>;
+    const selected = new Map<string, CanonicalControlRecord>();
+    const key = (record: Pick<CanonicalControlRecord, "kind" | "id">) => `${record.kind}\n${record.id}`;
+    for (const row of rows) {
+      const result = JSON.parse(row.result_json) as RunResult;
+      const failures = result.controlPlaneReconciliation?.failed ?? result.controlPlaneSync?.failed ?? [];
+      if (!failures.length) continue;
+      const failedKeys = new Set(failures.map((failure) => `${failure.kind}\n${failure.id}`));
+      for (const record of this.controlRecords(config, row.run_id)) if (failedKeys.has(key(record))) selected.set(key(record), record);
+    }
+    return [...selected.values()];
+  }
+
+  private runUsesExecutionConfig(runId: string, storedDigest: string, config: EffectiveConfig): boolean {
+    if (storedDigest === configDigest(config)) return true;
+    const snapshot = this.database.prepare(`SELECT config_snapshots.config_json FROM runs
+      JOIN config_snapshots ON config_snapshots.digest=runs.config_digest WHERE runs.run_id=?`).get(runId) as { config_json: string } | undefined;
+    return snapshot ? this.snapshotUsesExecutionConfig(storedDigest, snapshot.config_json, config) : false;
+  }
+
+  private snapshotUsesExecutionConfig(storedDigest: string, snapshotJson: string, config: EffectiveConfig): boolean {
+    if (storedDigest === configDigest(config)) return true;
+    try {
+      return configDigest(JSON.parse(snapshotJson) as EffectiveConfig) === configDigest(config);
+    } catch {
+      return false;
+    }
   }
 
   freezeDueSources(runId: string, sources: EffectiveConfig["preset"]["sources"], reason = "scheduled"): void {
@@ -143,15 +416,53 @@ export class SqliteStateStore {
       ({ kind, id, payload, ...(links && Object.keys(links).length ? { links } : {}) });
     const runRows = rows<Record<string, unknown>>("SELECT * FROM runs WHERE run_id=?", runId);
     const receiptRows = rows<Record<string, unknown>>(`SELECT r.*,d.reason due_reason FROM receipts r LEFT JOIN due_sources d ON d.run_id=r.run_id AND d.source_id=r.source_id WHERE r.run_id=? ORDER BY r.source_id`, runId);
-    const captureRows = rows<Record<string, unknown>>("SELECT * FROM captures WHERE run_id=? ORDER BY capture_id", runId);
-    const itemRows = rows<Record<string, unknown>>("SELECT * FROM items WHERE run_id=? ORDER BY item_id", runId);
+    const resultItemIds = new Set<string>();
+    const selectedItemIds = new Set<string>();
+    for (const run of runRows) {
+      if (typeof run.result_json !== "string") continue;
+      try {
+        const result = JSON.parse(run.result_json) as RunResult;
+        for (const item of [...result.daily, ...result.review]) selectedItemIds.add(item.id);
+        for (const item of [...result.daily, ...result.review, ...(result.machineOnly ?? [])]) resultItemIds.add(item.id);
+      } catch { /* incomplete result stays bounded to run-owned rows */ }
+    }
+    const runItemSnapshots = rows<{ item_id: string; capture_id: string; item_json: string }>("SELECT item_id,capture_id,item_json FROM run_items WHERE run_id=? ORDER BY item_id", runId);
+    const snapshotById = new Map(runItemSnapshots.map((row) => [row.item_id, row]));
+    const itemIds = new Set([...resultItemIds, ...runItemSnapshots.map((row) => row.item_id),
+      ...rows<{ item_id: string }>("SELECT item_id FROM items WHERE run_id=?", runId).map((row) => row.item_id)]);
+    const itemPlaceholders = [...itemIds].map(() => "?").join(",");
+    const itemRows = itemPlaceholders ? rows<Record<string, unknown>>(`SELECT * FROM items WHERE item_id IN (${itemPlaceholders}) ORDER BY item_id`, ...itemIds).map((row) => {
+      const snapshot = snapshotById.get(String(row.item_id));
+      if (!snapshot) return row;
+      const item = JSON.parse(snapshot.item_json) as BriefingItem;
+      return { ...row, run_id: runId, capture_id: snapshot.capture_id, title: item.title, summary: item.summary, why_it_matters: item.whyItMatters,
+        domain: item.domain ?? "unknown", evidence_status: item.evidenceStatus ?? item.evidence,
+        evidence_json: JSON.stringify({ status: item.evidenceStatus, url: item.url, claims: item.claims ?? [] }), analysis_json: snapshot.item_json,
+        score: item.score, disposition: item.disposition ?? "machine-only", exclusion_reason: item.exclusionReasons?.join(",") ?? null };
+    }) : [];
+    const linkedCaptureIds = [...new Set(itemRows.map((item) => String(item.capture_id)))];
+    const capturePlaceholders = linkedCaptureIds.map(() => "?").join(",");
+    const captureRows = rows<Record<string, unknown>>(`SELECT * FROM captures WHERE run_id=?${capturePlaceholders ? ` OR capture_id IN (${capturePlaceholders})` : ""} ORDER BY capture_id`, runId, ...linkedCaptureIds);
     const eventRows = rows<Record<string, unknown>>("SELECT * FROM events WHERE run_id=? ORDER BY event_id", runId);
+    const controlEventRows = eventRows.filter((event) => {
+      if (event.entity_type !== "item") return true;
+      if (!selectedItemIds.has(String(event.entity_id))) return false;
+      if (event.event_type !== "item.transition") return true;
+      try {
+        const payload = JSON.parse(String(event.payload_json)) as { toState?: string };
+        return payload.toState === "已生成简报" || payload.toState === "人工复核";
+      } catch { return false; }
+    });
     const feedbackRows = rows<Record<string, unknown>>(`SELECT f.* FROM feedback f JOIN items i ON i.item_id=f.item_id WHERE i.run_id=? ORDER BY f.feedback_id`, runId);
     const experimentRows = rows<Record<string, unknown>>("SELECT * FROM experiments ORDER BY experiment_id");
     const workflowRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-WORKFLOW-")).map((rule) => rule.id);
     const scoreRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-SCORE-")).map((rule) => rule.id);
     const sourceCursorRows = new Map(rows<Record<string, unknown>>("SELECT * FROM source_cursors").map((row) => [String(row.source_id), row]));
     const sourceSettingRows = new Map(rows<Record<string, unknown>>("SELECT * FROM source_settings").map((row) => [String(row.source_id), row]));
+    const publishedRunIds = new Set(rows<{ run_id: string }>(`SELECT runs.run_id FROM runs
+      WHERE runs.status IN ('success','partial','empty')
+        AND (SELECT COUNT(*) FROM output_artifacts WHERE output_artifacts.run_id=runs.run_id
+          AND output_artifacts.kind IN ('daily-markdown','review-markdown'))=2`).map((row) => row.run_id));
     const sourcePayload = (source: EffectiveConfig["preset"]["sources"][number]): Record<string, unknown> => {
       const cursor = sourceCursorRows.get(source.id); const setting = sourceSettingRows.get(source.id);
       if (!cursor && !setting) return source as unknown as Record<string, unknown>;
@@ -168,20 +479,25 @@ export class SqliteStateStore {
       ...config.preset.sources.map((source) => record("sources", source.id, sourcePayload(source))),
       ...config.policy.rules.map((rule) => record("rules", rule.id, rule as unknown as Record<string, unknown>)),
       ...runRows.map((row) => record("runs", String(row.run_id), row, {
-        sources: config.preset.sources.map((source) => source.id), rules: config.policy.rules.map((rule) => rule.id),
+        sources: this.dueSourceIds(runId), rules: config.policy.rules.map((rule) => rule.id),
         captures: captureRows.map((capture) => String(capture.capture_id)), items: itemRows.map((item) => String(item.item_id)),
-        events: eventRows.map((event) => String(event.event_id)), receipts: receiptRows.map((receipt) => `${runId}:${String(receipt.source_id)}`), feedback: feedbackRows.map((feedback) => String(feedback.feedback_id)),
+        events: controlEventRows.map((event) => String(event.event_id)), receipts: receiptRows.map((receipt) => `${runId}:${String(receipt.source_id)}`), feedback: feedbackRows.map((feedback) => String(feedback.feedback_id)),
       })),
-      ...captureRows.map((row) => record("captures", String(row.capture_id), row, { runs: [runId], sources: [String(row.source_id)], items: itemRows.filter((item) => item.capture_id === row.capture_id).map((item) => String(item.item_id)) })),
-      ...itemRows.map((row) => record("items", String(row.item_id), row, { runs: [runId], captures: [String(row.capture_id)], sources: captureRows.filter((capture) => capture.capture_id === row.capture_id).map((capture) => String(capture.source_id)), rules: scoreRuleIds,
-        events: eventRows.filter((event) => event.entity_type === "item" && event.entity_id === row.item_id).map((event) => String(event.event_id)) })),
-      ...eventRows.map((row) => record("events", String(row.event_id), row, { runs: [runId], rules: workflowRuleIds,
+      ...captureRows.map((row) => {
+        const originRunId = String(row.run_id);
+        const runLinks = [...new Set([runId, ...(originRunId !== runId && publishedRunIds.has(originRunId) ? [originRunId] : [])])];
+        return record("captures", String(row.capture_id), row, { runs: runLinks, sources: [String(row.source_id)], items: itemRows.filter((item) => item.capture_id === row.capture_id).map((item) => String(item.item_id)) });
+      }),
+      ...itemRows.map((row) => record("items", String(row.item_id), row, { runs: [...new Set([String(row.run_id), runId])], captures: [String(row.capture_id)], sources: captureRows.filter((capture) => capture.capture_id === row.capture_id).map((capture) => String(capture.source_id)), rules: scoreRuleIds,
+        events: controlEventRows.filter((event) => event.entity_type === "item" && event.entity_id === row.item_id).map((event) => String(event.event_id)) })),
+      ...controlEventRows.map((row) => record("events", String(row.event_id), row, { runs: [runId], rules: workflowRuleIds,
         ...(row.entity_type === "item" && row.entity_id ? { items: [String(row.entity_id)] } : {}) })),
       ...feedbackRows.map((row) => record("feedback", String(row.feedback_id), row, { items: [String(row.item_id)], runs: [runId] })),
       ...experimentRows.map((row) => record("experiments", String(row.experiment_id), row, { rules: config.policy.rules.map((rule) => rule.id) })),
       ...receiptRows.map((row) => {
         const source = config.preset.sources.find((entry) => entry.id === row.source_id);
-        const executionChannel = source?.connector.type === "github-releases" ? "GitHub" : source?.connector.type === "x-api" ? "X" : source?.sourceType === "paper" || source?.sourceType === "regulation" ? "论文与监管" : "官网与文档";
+        const executionChannel = source?.connector.type === "github-releases" ? "GitHub" : source?.connector.type === "x-api" || source?.connector.type === "codex-browser" ? "X"
+          : source?.sourceType === "paper" || source?.sourceType === "regulation" ? "论文与监管" : "官网与文档";
         return record("receipts", `${runId}:${String(row.source_id)}`, { ...row, execution_channel: executionChannel }, { runs: [runId], sources: [String(row.source_id)], rules: workflowRuleIds });
       }),
     ];
@@ -224,47 +540,59 @@ export class SqliteStateStore {
   }
 
   recordSourceResult(runId: string, receipt: Receipt, captures: CaptureEnvelope[], cursor: Record<string, unknown>, now: string): void {
+    let stateCaptures: CaptureEnvelope[];
+    let stateReceipt = receipt;
+    try {
+      stateCaptures = captures.map((capture) => normalizeCaptureForState(capture, receipt.sourceId));
+    } catch (error) {
+      stateCaptures = [];
+      stateReceipt = {
+        ...receipt,
+        result: "failed",
+        detail: `Invalid capture envelope: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
     this.database.exec("BEGIN IMMEDIATE");
     try {
       this.database.prepare(`INSERT INTO receipts(run_id,source_id,result,detail,attempted_at,completed_at,attempts,capture_count,error_code,duration_ms)
         VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id,source_id) DO NOTHING`).run(
-          runId, receipt.sourceId, receipt.result, receipt.detail ?? null, now, now, 1,
-          captures.filter((capture) => capture.fetchStatus !== "failed" && capture.extractStatus !== "failed").length,
-          receipt.result === "failed" ? "CAPTURE_FAILED" : null, receipt.durationMs ?? null,
+          runId, stateReceipt.sourceId, stateReceipt.result, stateReceipt.detail ?? null, now, now, 1,
+          stateCaptures.filter((capture) => capture.fetchStatus !== "failed" && capture.extractStatus !== "failed").length,
+          stateReceipt.result === "failed" ? "CAPTURE_FAILED" : null, stateReceipt.durationMs ?? null,
         );
       const captureStatement = this.database.prepare(`INSERT OR IGNORE INTO captures(
         capture_id,run_id,source_id,external_key,canonical_url,title,summary,published_at,captured_at,content_hash,evidence_class,raw_json
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
-      for (const capture of captures) {
+      for (const capture of stateCaptures) {
         const captureId = captureIdentity(capture);
         const { analysisText: _transientAnalysisText, ...persistentCapture } = capture;
         captureStatement.run(captureId, runId, capture.sourceId, capture.externalKey, capture.canonicalUrl, capture.title, capture.summary,
           capture.publishedAt ?? null, capture.capturedAt, capture.contentHash, capture.evidenceClass, JSON.stringify(persistentCapture));
         if (capture.fetchStatus !== "failed" && capture.extractStatus !== "failed") {
           this.database.prepare("INSERT OR IGNORE INTO capture_observations(run_id,capture_id,observed_at,changed) VALUES (?,?,?,?)")
-            .run(runId, captureId, now, receipt.result === "updated" ? 1 : 0);
+            .run(runId, captureId, now, stateReceipt.result === "updated" ? 1 : 0);
         }
       }
-      if (receipt.result === "failed") {
-        const failed = captures.find((capture) => capture.fetchStatus === "failed");
-        this.appendEvent(runId, now, "capture", "capture.failed", "source", receipt.sourceId, `${runId}:${receipt.sourceId}:capture-failed`, {
-          fromState: "已发现", toState: "抓取失败", actor: "采集器", reason: receipt.detail ?? failed?.failureReason ?? "capture failed",
+      if (stateReceipt.result === "failed") {
+        const failed = stateCaptures.find((capture) => capture.fetchStatus === "failed");
+        this.appendEvent(runId, now, "capture", "capture.failed", "source", stateReceipt.sourceId, `${runId}:${stateReceipt.sourceId}:capture-failed`, {
+          fromState: "已发现", toState: "抓取失败", actor: "采集器", reason: stateReceipt.detail ?? failed?.failureReason ?? "capture failed",
           attempts: failed?.attempts ?? 1, errorCode: "CAPTURE_FAILED",
         });
       }
-      if (receipt.result !== "failed" && receipt.result !== "skipped") {
-        const previous = this.sourceCursor(receipt.sourceId);
-        const priorEffective = this.database.prepare("SELECT last_effective_update_at FROM source_cursors WHERE source_id=?").get(receipt.sourceId) as { last_effective_update_at: string | null } | undefined;
+      if (stateReceipt.result !== "failed" && stateReceipt.result !== "skipped") {
+        const previous = this.sourceCursor(stateReceipt.sourceId);
+        const priorEffective = this.database.prepare("SELECT last_effective_update_at FROM source_cursors WHERE source_id=?").get(stateReceipt.sourceId) as { last_effective_update_at: string | null } | undefined;
         this.database.prepare(`INSERT INTO source_cursors(source_id,cursor_json,last_scan_at,last_success_at,last_effective_update_at,updated_at)
           VALUES (?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET cursor_json=excluded.cursor_json,last_scan_at=excluded.last_scan_at,
           last_success_at=excluded.last_success_at,last_effective_update_at=excluded.last_effective_update_at,updated_at=excluded.updated_at`).run(
-            receipt.sourceId, JSON.stringify({ ...previous, ...cursor }), now, now,
-            receipt.result === "updated" ? now : priorEffective?.last_effective_update_at ?? null, now,
+            stateReceipt.sourceId, JSON.stringify({ ...previous, ...cursor }), now, now,
+            stateReceipt.result === "updated" ? now : priorEffective?.last_effective_update_at ?? null, now,
           );
       } else {
         this.database.prepare(`INSERT INTO source_cursors(source_id,cursor_json,last_scan_at,last_success_at,last_effective_update_at,updated_at)
           VALUES (?,?,?,NULL,NULL,?) ON CONFLICT(source_id) DO UPDATE SET last_scan_at=excluded.last_scan_at,updated_at=excluded.updated_at`)
-          .run(receipt.sourceId, JSON.stringify(cursor), now, now);
+          .run(stateReceipt.sourceId, JSON.stringify(cursor), now, now);
       }
       this.database.exec("COMMIT");
     } catch (error) {
@@ -342,20 +670,31 @@ export class SqliteStateStore {
     return row ? JSON.parse(row.raw_json) as CaptureEnvelope : null;
   }
 
-  finishFormalRun(config: EffectiveConfig, result: RunResult, items: BriefingItem[], artifacts: Array<{ kind: string; path: string; contentHash: string }>, status: "success" | "partial" | "failed"): void {
+  publishedEventIdentities(excludeRunId: string): Set<string> {
+    const rows = this.database.prepare(`SELECT DISTINCT c.canonical_url,c.title
+      FROM run_items ri JOIN captures c ON c.capture_id=ri.capture_id JOIN runs r ON r.run_id=ri.run_id
+      WHERE ri.run_id<>? AND r.status IN ('success','partial','empty')
+        AND (SELECT COUNT(*) FROM output_artifacts a WHERE a.run_id=ri.run_id AND a.kind IN ('daily-markdown','review-markdown'))=2`)
+      .all(excludeRunId) as Array<{ canonical_url: string; title: string }>;
+    return new Set(rows.map((row) => canonicalEventIdentity(row.canonical_url, row.title)));
+  }
+
+  stageFormalRun(result: RunResult, items: BriefingItem[]): void {
     const captures = this.database.prepare("SELECT capture_id,source_id,content_hash FROM captures").all() as Array<{ capture_id: string; source_id: string; content_hash: string }>;
     const captureByVersion = new Map(captures.map((row) => [`${row.source_id}\n${row.content_hash}`, row.capture_id]));
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const itemStatement = this.database.prepare(`INSERT INTO items(item_id,run_id,capture_id,canonical_identity,title,summary,why_it_matters,domain,evidence_status,evidence_json,analysis_json,score,disposition,exclusion_reason)
+      const itemStatement = this.database.prepare(`INSERT OR IGNORE INTO items(item_id,run_id,capture_id,canonical_identity,title,summary,why_it_matters,domain,evidence_status,evidence_json,analysis_json,score,disposition,exclusion_reason)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-      const scoreStatement = this.database.prepare(`INSERT OR REPLACE INTO item_scores(item_id,dimension,raw_score,weight,weighted_score,reason) VALUES (?,?,?,?,?,?)`);
+      const runItemStatement = this.database.prepare("INSERT OR REPLACE INTO run_items(run_id,item_id,capture_id,item_json) VALUES (?,?,?,?)");
+      const scoreStatement = this.database.prepare(`INSERT OR IGNORE INTO item_scores(item_id,dimension,raw_score,weight,weighted_score,reason) VALUES (?,?,?,?,?,?)`);
       for (const item of items) {
         const captureId = item.captureHash ? captureByVersion.get(`${item.sourceId}\n${item.captureHash}`) : undefined;
         if (!captureId) continue;
         itemStatement.run(item.id, result.runId, captureId, item.id, item.title, item.summary, item.whyItMatters, item.domain ?? "unknown",
           item.evidenceStatus ?? item.evidence, JSON.stringify({ status: item.evidenceStatus, url: item.url, claims: item.claims ?? [] }), JSON.stringify(item),
           item.score, item.disposition ?? "machine-only", item.exclusionReasons?.join(",") ?? null);
+        runItemStatement.run(result.runId, item.id, captureId, JSON.stringify(item));
         for (const [dimension, score] of Object.entries(item.scoreDimensions ?? {})) scoreStatement.run(item.id, dimension, score.value, score.weight, score.weighted, score.reason);
         const terminal = item.disposition === "daily" ? "已生成简报" : item.disposition === "review" ? "人工复核" : "已淘汰";
         const states = ["无", "已发现", "已抓取", "已标准化", "原文已核验", "已去重", "已评分", ...((item.disposition === "daily" || item.disposition === "review") ? ["已入围"] : []), terminal];
@@ -366,8 +705,6 @@ export class SqliteStateStore {
           this.appendEvent(result.runId, result.generatedAt, "item-transition", "item.transition", "item", item.id, `${result.runId}:${item.id}:${index}`, payload);
         }
       }
-      const artifactStatement = this.database.prepare("INSERT OR REPLACE INTO output_artifacts(run_id,kind,path,content_hash) VALUES (?,?,?,?)");
-      for (const artifact of artifacts) artifactStatement.run(result.runId, artifact.kind, artifact.path, artifact.contentHash);
       this.database.prepare("UPDATE runs SET status='finalizing',result_json=?,current_stage='persist' WHERE run_id=?")
         .run(JSON.stringify(result), result.runId);
       this.database.exec("COMMIT");
@@ -377,7 +714,7 @@ export class SqliteStateStore {
     }
   }
 
-  finalizeFormalRun(runId: string, status: "success" | "partial" | "failed", now = new Date().toISOString()): void {
+  finalizeFormalRun(runId: string, status: FormalRunOutcome, now = new Date().toISOString()): void {
     this.database.prepare("UPDATE runs SET status=?,completed_at=?,current_stage='complete' WHERE run_id=? AND status IN ('running','finalizing')")
       .run(status, now, runId);
   }
@@ -388,19 +725,38 @@ export class SqliteStateStore {
 
   commitFinalArtifacts(
     result: RunResult,
-    artifacts: Array<{ kind: string; contentHash: string }>,
-    status: "success" | "partial" | "failed",
+    artifacts: Array<{ kind: string; path: string; contentHash: string }>,
+    status: FormalRunOutcome,
     completedAt: string,
   ): void {
+    if (result.publicationState !== "published" || status === "failed") throw new Error("Published artifacts require a non-failed published result");
+    if (artifacts.length !== 2 || !artifacts.some((artifact) => artifact.kind === "daily-markdown") || !artifacts.some((artifact) => artifact.kind === "review-markdown")) {
+      throw new Error(`Published run ${result.runId} requires exactly one Daily and one Review artifact`);
+    }
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const updateArtifact = this.database.prepare("UPDATE output_artifacts SET content_hash=? WHERE run_id=? AND kind=?");
+      const updateArtifact = this.database.prepare("INSERT OR REPLACE INTO output_artifacts(run_id,kind,path,content_hash) VALUES (?,?,?,?)");
       for (const artifact of artifacts) {
-        const updated = updateArtifact.run(artifact.contentHash, result.runId, artifact.kind);
-        if (updated.changes !== 1) throw new Error(`Run ${result.runId} is missing ${artifact.kind}`);
+        updateArtifact.run(result.runId, artifact.kind, artifact.path, artifact.contentHash);
       }
       const updated = this.database.prepare("UPDATE runs SET status=?,completed_at=?,current_stage='complete',result_json=? WHERE run_id=? AND status IN ('running','finalizing')")
         .run(status, completedAt, JSON.stringify(result), result.runId);
+      if (updated.changes !== 1) throw new Error(`Run ${result.runId} cannot be finalized from its current state`);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  finalizeWithheldRun(result: RunResult, status: FormalRunOutcome, completedAt: string): void {
+    if (status !== "failed" || result.publicationState !== "withheld") throw new Error("A withheld run must finalize as failed");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const artifacts = this.database.prepare("SELECT COUNT(*) count FROM output_artifacts WHERE run_id=?").get(result.runId) as { count: number };
+      if (artifacts.count !== 0) throw new Error(`Withheld run ${result.runId} must not have published artifacts`);
+      const updated = this.database.prepare("UPDATE runs SET status='failed',completed_at=?,current_stage='complete',result_json=? WHERE run_id=? AND status IN ('running','finalizing')")
+        .run(completedAt, JSON.stringify(result), result.runId);
       if (updated.changes !== 1) throw new Error(`Run ${result.runId} cannot be finalized from its current state`);
       this.database.exec("COMMIT");
     } catch (error) {
@@ -590,8 +946,8 @@ export class SqliteStateStore {
     const rows = this.database.prepare(`SELECT analysis_json FROM items WHERE item_id IN (${placeholders}) ORDER BY item_id`).all(...sample!.itemIds) as Array<{ analysis_json: string }>;
     if (rows.length !== sample!.itemIds.length) throw new Error(`Experiment ${id} frozen sample is incomplete`);
     const items = rows.map((row) => JSON.parse(row.analysis_json) as BriefingItem);
-    const baseline = selectCandidatesUnderPolicy(experiment.baselinePolicy, items.map((item) => replayCandidateUnderPolicy(experiment.baselinePolicy, item)));
-    const candidate = selectCandidatesUnderPolicy(experiment.policy, items.map((item) => replayCandidateUnderPolicy(experiment.policy, item)));
+    const baseline = selectCandidatesUnderPolicy(experiment.baselinePolicy, items.map((item) => replayCandidateUnderPolicy(experiment.baselinePolicy, item)), { eventDedupe: false });
+    const candidate = selectCandidatesUnderPolicy(experiment.policy, items.map((item) => replayCandidateUnderPolicy(experiment.policy, item)), { eventDedupe: false });
     const sampleDigest = createHash("sha256").update(`${sample!.itemIds.join("\n")}\n${sample!.feedbackCutoff}`).digest("hex");
     const frozenFeedback = this.database.prepare(`SELECT MIN(created_at) first_at,MAX(created_at) last_at FROM feedback
       WHERE item_id IN (${placeholders}) AND created_at<=?`).get(...sample!.itemIds, sample!.feedbackCutoff) as { first_at: string | null; last_at: string | null };
@@ -685,14 +1041,22 @@ export class SqliteStateStore {
     return row ? { id: row.schedule_id, adapter: row.adapter, expression: row.expression, installedAt: row.installed_at } : null;
   }
 
-  latestLivePreview(configDigestValue: string): { runId: string; generatedAt: string; status: string; path: string; contentHash: string } | null {
+  latestEditorialPreview(configDigestValue: string): { runId: string; generatedAt: string; status: string; path: string; contentHash: string; itemCount: number; modelFailureCount: number } | null {
     const row = this.database.prepare(`SELECT r.run_id,r.generated_at,r.status,a.path,a.content_hash
       FROM runs r JOIN output_artifacts a ON a.run_id=r.run_id AND a.kind='preview-markdown'
       WHERE r.run_kind='preview' AND r.mode='live' AND r.config_digest=? AND r.status IN ('success','partial')
+        AND json_extract(r.result_json,'$.previewKind')='editorial'
+        AND COALESCE(json_extract(r.result_json,'$.previewScope'),'configured-due')='configured-due'
+        AND COALESCE(json_array_length(json_extract(r.result_json,'$.daily')),0)+COALESCE(json_array_length(json_extract(r.result_json,'$.review')),0)>0
+        AND COALESCE(json_array_length(json_extract(r.result_json,'$.modelFailures')),0)=0
       ORDER BY r.generated_at DESC LIMIT 1`).get(configDigestValue) as {
         run_id: string; generated_at: string; status: string; path: string; content_hash: string;
       } | undefined;
-    return row ? { runId: row.run_id, generatedAt: row.generated_at, status: row.status, path: row.path, contentHash: row.content_hash } : null;
+    if (!row) return null;
+    const result = this.database.prepare("SELECT result_json FROM runs WHERE run_id=?").get(row.run_id) as { result_json: string };
+    const parsed = JSON.parse(result.result_json) as RunResult;
+    return { runId: row.run_id, generatedAt: row.generated_at, status: row.status, path: row.path, contentHash: row.content_hash,
+      itemCount: parsed.daily.length + parsed.review.length, modelFailureCount: parsed.modelFailures?.length ?? 0 };
   }
 
   disableSchedule(id: string, now = new Date().toISOString()): void {
@@ -767,7 +1131,7 @@ export class SqliteStateStore {
     result: RunResult,
     artifact?: { kind: string; path: string; contentHash: string },
   ): void {
-    const outcome = runOutcome(countReceipts(result.dueSourceIds ?? config.preset.sources.map((source) => source.id), result.receipts));
+    const outcome = result.outcome ?? runOutcome(countReceipts(result.dueSourceIds ?? config.preset.sources.map((source) => source.id), result.receipts));
     this.database.exec("BEGIN IMMEDIATE");
     try {
       this.assertRunWritable(result);
@@ -808,6 +1172,7 @@ export class SqliteStateStore {
     generatedAt: string;
     mode: string;
     status: string;
+    staleSince: string | null;
     artifactPath: string | null;
     updated: number;
     observed: number;
@@ -854,7 +1219,8 @@ export class SqliteStateStore {
       runId: row.run_id,
       generatedAt: row.generated_at,
       mode: row.mode,
-      status: row.status,
+      status: (["running", "finalizing"].includes(row.status) && (() => { const activity = this.latestRunActivity(row.run_id); return Boolean(activity && Date.now() - new Date(activity).getTime() >= 30 * 60_000); })()) ? "abandoned" : row.status,
+      staleSince: ["running", "finalizing"].includes(row.status) ? this.latestRunActivity(row.run_id) : null,
       artifactPath: row.artifact_path,
       updated: row.updated,
       observed: row.observed,
@@ -916,6 +1282,44 @@ export class SqliteStateStore {
 
 function hashJson(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function normalizeCaptureForState(capture: CaptureEnvelope, receiptSourceId: string): CaptureEnvelope {
+  if (!capture || typeof capture !== "object" || Array.isArray(capture)) throw new Error("capture must be an object");
+  const raw = capture as unknown as Record<string, unknown>;
+  for (const [field, value] of Object.entries(raw)) {
+    if (field === "externalKey" || value === undefined || value === null) continue;
+    if (!["string", "number", "boolean"].includes(typeof value)) throw new Error(`${field} must be a SQLite-bindable scalar`);
+    if (typeof value === "number" && !Number.isFinite(value)) throw new Error(`${field} must be finite`);
+  }
+  const sourceId = normalizeScalarText(raw.sourceId);
+  if (!sourceId || sourceId !== receiptSourceId) throw new Error("sourceId must match the source receipt");
+  const canonicalUrl = normalizeScalarText(raw.canonicalUrl);
+  if (!canonicalUrl) throw new Error("canonicalUrl must be a non-empty scalar string");
+  const title = normalizeScalarText(raw.title);
+  if (!title) throw new Error("title must be a non-empty scalar string");
+  const capturedAt = normalizeScalarText(raw.capturedAt);
+  if (!capturedAt) throw new Error("capturedAt must be a non-empty scalar string");
+  const contentHash = normalizeScalarText(raw.contentHash);
+  if (!contentHash) throw new Error("contentHash must be a non-empty scalar string");
+  const evidenceClass = normalizeScalarText(raw.evidenceClass);
+  if (evidenceClass !== "primary" && evidenceClass !== "secondary") throw new Error("evidenceClass must be primary or secondary");
+  const summary = typeof raw.summary === "string" ? raw.summary : normalizeScalarText(raw.summary);
+  if (summary === undefined) throw new Error("summary must be a scalar string");
+  const publishedAt = raw.publishedAt === undefined ? undefined : normalizeScalarText(raw.publishedAt);
+  if (raw.publishedAt !== undefined && !publishedAt) throw new Error("publishedAt must be a scalar string when present");
+  return {
+    ...capture,
+    sourceId,
+    externalKey: normalizeExternalKey(canonicalUrl, raw.externalKey),
+    canonicalUrl,
+    title,
+    summary,
+    capturedAt,
+    contentHash,
+    evidenceClass,
+    ...(publishedAt ? { publishedAt } : {}),
+  };
 }
 
 function captureIdentity(capture: CaptureEnvelope): string {

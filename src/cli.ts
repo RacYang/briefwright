@@ -4,19 +4,22 @@ import path from "node:path";
 import { readFileSync } from "node:fs";
 
 import { Command } from "commander";
+import { runtimeTreeDigest } from "./runtime-integrity.js";
 
 import { diffConfiguration, ejectConfiguration, explainConfiguration, renderConfiguration, validateConfiguration } from "./commands/config.js";
 import { decideProjectCadence, evaluateProjectCadence, listCadenceProposals, lockSourceCadence } from "./commands/cadence.js";
 import { runDemo } from "./commands/demo.js";
-import { runDoctor } from "./commands/doctor.js";
+import { doctorReport, runDoctor } from "./commands/doctor.js";
 import { addProjectFeedback, projectFeedbackSummary, FEEDBACK_TYPES } from "./commands/feedback.js";
 import { initializeProject } from "./commands/init.js";
 import { setupProject } from "./commands/setup.js";
 import { importContract, importLarkSnapshot, provisionLarkProject, syncProject } from "./commands/import-sync.js";
+import { migrateSources } from "./commands/source-migration.js";
 import { diagnoseProject, listImprovementProposals } from "./commands/improve.js";
 import { commitKnowledge, proposeKnowledge } from "./commands/knowledge.js";
 import { createPolicyExperiment, evaluatePolicyExperiment, transitionPolicyExperiment } from "./commands/experiment.js";
 import { migrateConfiguration, migrateProjectDatabase } from "./commands/migrate.js";
+import { quarantineLegacyRun } from "./commands/quarantine.js";
 import { latestArtifactPath, launchProjectArtifact } from "./commands/open.js";
 import { previewProject } from "./commands/preview.js";
 import { verifyReplay } from "./commands/replay.js";
@@ -146,8 +149,12 @@ program
   .description("Validate the project and generate a local fixture preview without scheduling.")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .option("--live", "read the preset's public sources instead of bundled fixtures", false)
-  .action(async ({ config, live }: { config: string; live: boolean }) => {
-    const result = await previewProject(config, { live });
+  .option("--editorial", "run a bounded real-model editorial shadow; writes only a local preview", false)
+  .option("--capture-bundle <path>", "validated browser capture bundle for configured external sources")
+  .option("--bundle-only", "limit an editorial shadow to sources listed in the supplied capture bundle", false)
+  .option("--historical-bundle", "allow an expired capture bundle only in an isolated editorial bundle-only shadow", false)
+  .action(async ({ config, live, editorial, captureBundle, bundleOnly, historicalBundle }: { config: string; live: boolean; editorial: boolean; captureBundle?: string; bundleOnly: boolean; historicalBundle: boolean }) => {
+    const result = await previewProject(config, { live, editorial, bundleOnly, historicalBundle, ...(captureBundle ? { captureBundlePath: captureBundle } : {}) });
     if (isJsonOutput()) {
       writeJson({ ok: result.outcome !== "failed", command: "preview", scheduleEnabled: false, ...result });
       if (result.outcome === "failed") process.exitCode = 1;
@@ -155,11 +162,12 @@ program
     }
     console.log(
       result.mode === "live"
-        ? "Live preview complete (no schedule was enabled).\n"
+        ? `${result.previewKind === "editorial" ? "Editorial shadow" : "Live source preview"} complete (no schedule was enabled).\n`
         : "Preview complete (bundled example data; no schedule was enabled).\n",
     );
     console.log(`Briefing: ${result.outputPath}`);
     console.log(`Items: ${result.itemCount}`);
+    if (result.previewKind === "editorial") console.log(`Analyzed: ${result.analyzedCount}; model failures: ${result.modelFailures.length}`);
     console.log(`Source receipts: ${result.receiptCount}`);
     console.log(`Outcome: ${result.outcome}`);
     for (const failure of result.failedReceipts) {
@@ -173,22 +181,26 @@ program
   .description("Execute the formal incremental briefing pipeline with the configured AI provider.")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .option("--retry-failed", "create or resume an immutable recovery run for the latest failed operations", false)
+  .option("--reverify-evidence", "create or resume an immutable recovery run that refetches and rechecks primary unverified items", false)
+  .option("--base-run <id>", "explicit RUN-YYYYMMDD-DAILY lineage to recover across a date boundary")
   .option("--capture-bundle <path>", "validated browser capture bundle for configured external sources")
-  .action(async ({ config, retryFailed, captureBundle }: { config: string; retryFailed: boolean; captureBundle?: string }) => {
-    const result = await runFormalProject(config, { retryFailed, ...(captureBundle ? { captureBundlePath: captureBundle } : {}) });
+  .action(async ({ config, retryFailed, reverifyEvidence, baseRun, captureBundle }: { config: string; retryFailed: boolean; reverifyEvidence: boolean; baseRun?: string; captureBundle?: string }) => {
+    const result = await runFormalProject(config, { retryFailed, reverifyEvidence, ...(baseRun ? { baseRunId: baseRun } : {}), ...(captureBundle ? { captureBundlePath: captureBundle } : {}) });
     if (isJsonOutput()) {
       writeJson({
         ok: result.outcome !== "failed",
         command: "run",
         runId: result.runId,
         outcome: result.outcome,
+        publicationState: result.publicationState,
         resumed: result.resumed,
         alreadyComplete: result.alreadyComplete,
         remoteExisting: result.remoteExisting ?? false,
-        dailyPath: result.dailyPath,
-        reviewPath: result.reviewPath,
+        dailyPath: result.publicationState === "published" ? result.dailyPath : null,
+        reviewPath: result.publicationState === "published" ? result.reviewPath : null,
         counts: result.result.receipts.reduce((counts, receipt) => ({ ...counts, [receipt.result]: (counts[receipt.result] ?? 0) + 1 }), {} as Record<string, number>),
         modelFailures: result.result.modelFailures ?? [],
+        analysisBacklog: result.result.analysisBacklog ?? [],
         selected: { daily: result.result.daily.length, review: result.result.review.length, machineOnly: result.result.machineOnly?.length ?? 0 },
         domains: [...new Set([...result.result.daily, ...result.result.review].map((item) => item.domain).filter(Boolean))],
         ruleIds: result.result.ruleIds,
@@ -203,9 +215,10 @@ program
     }
     console.log(`${result.alreadyComplete ? "Formal run already complete" : "Formal run complete"}: ${result.runId}`);
     console.log(`Outcome: ${result.outcome}`);
-    console.log(`Daily: ${result.dailyPath}`);
-    console.log(`Review: ${result.reviewPath}`);
+    console.log(result.publicationState === "published" ? `Daily: ${result.dailyPath}` : "Daily: withheld");
+    console.log(result.publicationState === "published" ? `Review: ${result.reviewPath}` : "Review: withheld");
     for (const failure of result.result.modelFailures ?? []) console.log(`MODEL FAILED ${failure.sourceId}: ${failure.detail}`);
+    for (const deferred of result.result.analysisBacklog ?? []) console.log(`ANALYSIS DEFERRED ${deferred.sourceId}: ${deferred.count} pending capture${deferred.count === 1 ? "" : "s"} limited by runtime.maximumCapturesPerRun`);
     if (result.outcome === "failed") process.exitCode = 1;
   });
 
@@ -300,6 +313,23 @@ dbCommand
     console.log(result.applied.length ? `Applied: ${result.applied.join(", ")}` : `Pending: ${result.pending.map((item) => item.version).join(", ") || "none"}`);
     if ("backupPath" in result && result.backupPath) console.log(`Backup: ${result.backupPath}`);
   });
+dbCommand
+  .command("quarantine")
+  .description("Preview or recoverably isolate one incomplete legacy formal run.")
+  .argument("<run-id>")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .option("--write", "create a verified evidence copy, back up SQLite, and apply the exact-run quarantine", false)
+  .option("--yes", "confirm the local state and document changes", false)
+  .option("--reason <text>", "operator reason recorded in the audit manifest")
+  .action(async (runId: string, { config, write, yes, reason }: { config: string; write: boolean; yes: boolean; reason?: string }) => {
+    const result = await quarantineLegacyRun(config, runId, { write, yes, ...(reason ? { reason } : {}) });
+    if (isJsonOutput()) return writeJson({ ok: true, command: "db quarantine", ...result });
+    console.log(`${result.written ? "Applied" : "Preview"}: ${result.action} for ${result.runId}`);
+    for (const artifact of result.artifacts) console.log(`${artifact.existed ? "COPY" : "MISSING"} ${artifact.originalPath}`);
+    if (!result.written && result.action !== "none") console.log("No changes made. Re-run with --write --yes after reviewing this exact plan.");
+    if (result.backupPath) console.log(`Database backup: ${result.backupPath}`);
+    if (result.manifestPath) console.log(`Recovery manifest: ${result.manifestPath}`);
+  });
 
 const importCommand = program.command("import").description("Read an existing control plane or execution contract into a versioned local snapshot.");
 importCommand.command("lark")
@@ -321,6 +351,7 @@ larkCommand.command("provision")
     console.log(`Lark Base ${result.ready ? "is ready" : "needs attention"}.`);
     console.log(`Created tables: ${result.createdTables.join(", ") || "none"}`);
     console.log(`Created fields: ${result.createdFields.join(", ") || "none"}`);
+    console.log(`Updated fields: ${result.updatedFields.join(", ") || "none"}`);
     for (const check of result.checks) console.log(`${check.ok ? "PASS" : "FAIL"} ${check.name}: ${check.detail}`);
     if (!result.ready) process.exitCode = 1;
   });
@@ -342,7 +373,16 @@ const syncCommand = program.command("sync").description("Plan or explicitly appl
 syncCommand.command("plan").option("-c, --config <path>", "intent configuration", "briefing.yaml").option("--run <id>")
   .action(async ({ config, run }: { config: string; run?: string }) => { const result = await syncProject(config, false, false, run); if (isJsonOutput()) return writeJson({ ok: true, command: "sync plan", ...result }); console.log(JSON.stringify(result, null, 2)); });
 syncCommand.command("apply").requiredOption("--yes", "confirm external process-store writes").option("-c, --config <path>", "intent configuration", "briefing.yaml").option("--run <id>")
-  .action(async ({ config, run }: { config: string; run?: string }) => { const result = await syncProject(config, true, true, run); if (isJsonOutput()) return writeJson({ ok: true, command: "sync apply", ...result }); console.log(JSON.stringify(result, null, 2)); });
+  .action(async ({ config, run }: { config: string; run?: string }) => {
+    const result = await syncProject(config, true, true, run); const ok = result.result?.acknowledged === true;
+    if (isJsonOutput()) writeJson({ ok, command: "sync apply", ...result }); else console.log(JSON.stringify(result, null, 2));
+    if (!ok) process.exitCode = 1;
+  });
+const syncSourcesCommand = syncCommand.command("sources").description("Plan or apply governed connector or activation migrations by stable Source ID.");
+syncSourcesCommand.command("plan").requiredOption("--file <path>", "versioned source migration document").option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config, file }: { config: string; file: string }) => { const result = await migrateSources(config, file, false, false); if (isJsonOutput()) return writeJson({ ok: true, command: "sync sources plan", ...result }); console.log(JSON.stringify(result, null, 2)); });
+syncSourcesCommand.command("apply").requiredOption("--file <path>", "versioned source migration document").requiredOption("--yes", "confirm external connector configuration writes").option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config, file }: { config: string; file: string }) => { const result = await migrateSources(config, file, true, true); if (isJsonOutput()) return writeJson({ ok: true, command: "sync sources apply", ...result }); console.log(JSON.stringify(result, null, 2)); });
 
 const feedbackCommand = program.command("feedback").description("Record human outcome signals without changing policy automatically.");
 feedbackCommand.command("add")
@@ -517,16 +557,16 @@ program
   .option("--all-sources", "with --online, probe every enabled source instead of only sources currently due", false)
   .action(async ({ config, online, allSources }: { config: string; online: boolean; allSources: boolean }) => {
     const checks = await runDoctor(config, { online, allSources });
-    const blockingFailures = checks.filter((check) => !check.ok && check.blocking !== false);
+    const report = doctorReport(checks);
     if (isJsonOutput()) {
-      writeJson({ ok: blockingFailures.length === 0, command: "doctor", checks });
-      if (blockingFailures.length) process.exitCode = 1;
+      writeJson(report);
+      if (!report.ok) process.exitCode = 1;
       return;
     }
     for (const check of checks) {
       console.log(`${check.ok ? "PASS" : check.blocking === false ? "WARN" : "FAIL"} ${check.name}: ${check.detail}`);
     }
-    if (blockingFailures.length) process.exitCode = 1;
+    if (!report.ok) process.exitCode = 1;
   });
 
 program
@@ -569,6 +609,7 @@ program
       `Sources: ${status.latestRun.observed} observed, ${status.latestRun.updated} updated, ${status.latestRun.unchanged} unchanged, ${status.latestRun.failed} failed, ${status.latestRun.skipped} skipped`,
     );
     if (status.latestRun.artifactPath) console.log(`Briefing: ${status.latestRun.artifactPath}`);
+    for (const recovery of status.recoveries) console.log(`RECOVERY ${recovery.runId}: ${recovery.recoveryAction} (${recovery.effectiveStatus})`);
   });
 
 program
@@ -589,11 +630,12 @@ program
 program
   .command("capabilities")
   .description("Describe the installed CLI surface and safety-relevant feature state.")
-  .action(() => {
+  .action(async () => {
     const capabilities = {
       version: VERSION,
+      runtimeDigest: await runtimeTreeDigest(),
       commands: ["demo", "setup", "skill", "init", "preview", "run", "capture", "replay", "status", "open", "doctor", "import", "lark", "sql", "sync", "config", "db", "schedule", "enable", "feedback", "improve", "experiment", "cadence", "knowledge", "capabilities"],
-      connectors: ["rss", "github-releases", "webpage", "x-api", "codex-browser", "extension-sdk"],
+      connectors: ["rss", "github-releases", "webpage", "x-api", "codex-browser", "in-app-browser", "computer-use", "extension-sdk"],
       providers: ["codex", "openai", "anthropic", "gemini", "qwen", "ollama", "custom-openai-compatible", "custom-protocol", "fixture"],
       processStores: ["lark-cli", "postgres", "mysql", "sqlite-fallback"],
       documentStores: ["obsidian", "local-folder-fallback"],

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { loadEffectiveConfig, canonicalJson } from "../config/load.js";
 import { writeArtifactAtomic } from "../outputs/write.js";
-import { controlPlaneFor } from "../control-plane/registry.js";
+import { controlPlaneFor, hydrateControlPlaneContext } from "../control-plane/registry.js";
 import { provisionLarkControlPlane } from "../control-plane/lark.js";
 import { validateControlRecords } from "../control-plane/contract.js";
 import { SqliteStateStore } from "../state/sqlite.js";
@@ -51,7 +51,9 @@ export async function importContract(configPath: string, contractPath: string) {
 
 export async function syncProject(configPath: string, apply: boolean, yes: boolean, runId?: string) {
   if (apply && !yes) throw new Error("sync apply requires --yes");
-  const config = await loadEffectiveConfig(configPath); const status = await projectStatus(configPath);
+  const loadedConfig = await loadEffectiveConfig(configPath);
+  const config = (await hydrateControlPlaneContext(loadedConfig, { mode: "full" })).config;
+  const status = await projectStatus(configPath);
   const selectedRunId = runId ?? status.latestRun?.runId;
   if (!selectedRunId) throw new Error("No local run exists to sync. Run a preview or formal run first.");
   const state = new SqliteStateStore(config.storage.path, config.projectRoot); const store = controlPlaneFor(config);

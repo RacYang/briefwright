@@ -12,7 +12,7 @@ import type { CaptureEnvelope } from "../src/connectors/types.js";
 
 const capture: CaptureEnvelope = { sourceId: "SRC-TEST", externalKey: "1", canonicalUrl: "https://example.com/1", title: "Runtime update",
   summary: "The runtime adds an evidence checkpoint.", capturedAt: "2026-08-11T00:00:00Z", contentHash: "abc", evidenceClass: "primary", analysisText: "Full transient evidence includes implementation boundaries." };
-function analysis() { const score = { value: 4, reason: "Primary evidence." }; return { summary: capture.summary, whyItMatters: "Improves auditability.", domain: "Agent", claims: ["Adds an evidence checkpoint"], knowledgePotential: { reusableQuestion: true, mechanismIncrement: true, durableWithoutVersion: true, reason: "Reusable" }, scores: { authority: score, evidence: score, relevance: score, impact: score, novelty: score, recency: score, actionability: score }, exclusions: [] }; }
+function analysis() { const score = { value: 4, reason: "Primary evidence." }; return { title: "Runtime adds evidence checkpoint", summary: capture.summary, whyItMatters: "Improves auditability.", domain: "Agent", claims: ["Adds an evidence checkpoint"], claimEvidence: [{ claimIndex: 0, excerpt: "Full transient evidence includes implementation boundaries." }], knowledgePotential: { reusableQuestion: true, mechanismIncrement: true, durableWithoutVersion: true, reason: "Reusable" }, scores: { authority: score, evidence: score, relevance: score, impact: score, novelty: score, recency: score, actionability: score }, exclusions: [] }; }
 
 async function providerContext(model: string, secretName: string, secretValue: string) {
   const root = await mkdtemp(path.join(tmpdir(), `briefwright-${model}-`)); process.env[secretName] = secretValue;

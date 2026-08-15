@@ -21,6 +21,7 @@ export interface CaptureEnvelope {
   summary: string;
   capturedAt: string;
   publishedAt?: string;
+  pageUpdatedAt?: string;
   contentHash: string;
   evidenceClass: "primary" | "secondary";
   discoveryUrl?: string;
@@ -33,11 +34,13 @@ export interface CaptureEnvelope {
   language?: string;
   author?: string;
   publishedRaw?: string;
+  pageUpdatedRaw?: string;
   eventDateRaw?: string;
   etag?: string;
   lastModified?: string;
   parserVersion?: string;
   failureReason?: string;
+  recoveryOfContentHash?: string;
   /** Untrusted source text available only for the current in-memory analysis pass. Never persist or sync. */
   analysisText?: string;
 }

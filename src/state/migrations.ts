@@ -312,6 +312,22 @@ export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
       ALTER TABLE analysis_attempts ADD COLUMN cost_usd REAL;
     `,
   },
+  {
+    version: 12,
+    name: "immutable-run-item-snapshots",
+    sql: `
+      CREATE TABLE IF NOT EXISTS run_items (
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        item_id TEXT NOT NULL REFERENCES items(item_id),
+        capture_id TEXT NOT NULL REFERENCES captures(capture_id),
+        item_json TEXT NOT NULL,
+        PRIMARY KEY (run_id, item_id)
+      );
+      CREATE INDEX IF NOT EXISTS run_items_item ON run_items(item_id, run_id);
+      INSERT OR IGNORE INTO run_items(run_id,item_id,capture_id,item_json)
+      SELECT run_id,item_id,capture_id,analysis_json FROM items;
+    `,
+  },
 ];
 
 function checksum(migration: DatabaseMigration): string {

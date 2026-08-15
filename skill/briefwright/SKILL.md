@@ -106,10 +106,19 @@ failures are blocking for the affected integration. Individual source failures c
 preserving the original run. Use `run --retry-failed` only when failed or pending work exists; it
 creates an immutable recovery run and never rewrites the original.
 
-When `xCapture: codex-browser` is configured, use the capture manifest. If it lists sources, inspect
-only those public X profiles in strict read-only mode, create the declared bundle, validate it, and
-pass it to the run. Missing access is a failed receipt, never permission to access private content
-or interact with X.
+Always inspect the capture manifest before a live preview or formal run. For `codex-browser`, inspect
+only the listed public X profiles in strict read-only mode. For `in-app-browser`, use the isolated Codex
+in-app Browser without taking over Chrome, the user's foreground tab, or another desktop app. Reserve
+`computer-use` for a source that explicitly requires local App/UI operation. For either URL-bound mode,
+open only the declared entry URL, remain on its exact allowed hosts, and read only public visible content.
+Never log in, type, download, interact, change settings, or access private content. Create the declared
+bundle, validate it, and pass it to the run. Missing access, a mode mismatch, or an out-of-bound URL is a
+failed receipt, never permission to broaden access or silently fall back to HTTP.
+If an in-app Browser or Computer Use capture includes `publishedAt`, require `dateKind: event` or
+`dateKind: page-updated`. Only an explicit event date may drive Daily freshness; a page-update date is
+document metadata and must not be restated as an event date. For a bounded incident replay, use
+`preview --live --editorial --capture-bundle BUNDLE --bundle-only`; do not use that partial scope as
+schedule-readiness proof.
 
 ## Diagnose and explain
 
@@ -136,7 +145,10 @@ knowledge commit:
 4. invoke the matching CLI operation with `--yes`;
 5. read back status and report the actual result.
 
-For schedules, first complete a current live preview and online doctor, then describe the schedule.
+For schedules, first complete a current source preview, then `preview --live --editorial` with the
+configured real model, and an online doctor. A source-only preview is not evidence that the briefing is
+useful. The editorial shadow must contain at least one Daily or Review item, have no model failures, and
+remain a local preview. Then describe the schedule.
 Enablement must reject a stale or tampered preview, changed configuration, or failed online
 preflight. For evergreen knowledge, show the proposal preview before the approved commit. Never
 write the knowledge target directly.

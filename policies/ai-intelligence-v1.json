@@ -29,5 +29,10 @@
     "基础", "机器学习与深度学习", "模型与生成式 AI", "数据与知识",
     "系统与工程", "安全与治理", "应用域", "Agent"
   ],
-  "retention": { "quoteWordLimit": 25 }
+  "retention": { "quoteWordLimit": 25 },
+  "freshness": {
+    "dailyMaximumAgeHours": 72,
+    "reviewMaximumAgeHours": 720,
+    "futureToleranceHours": 6
+  }
 }

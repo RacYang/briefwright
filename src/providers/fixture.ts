@@ -14,10 +14,12 @@ export class FixtureModelProvider implements ModelProvider {
   async analyze(capture: CaptureEnvelope, context: AnalysisContext): Promise<ModelAnalysis> {
     const relevant = context.interests.some((interest) => `${capture.title} ${capture.summary}`.toLowerCase().includes(interest.toLowerCase().split(" ")[0]!));
     return {
+      title: capture.title,
       summary: capture.summary || capture.title,
       whyItMatters: relevant ? "The source directly overlaps the configured interests." : "The source may affect the monitored AI ecosystem.",
       domain: context.domains.includes("Agent") ? "Agent" : context.domains[0]!,
       claims: [capture.title],
+      claimEvidence: [{ claimIndex: 0, excerpt: capture.title }],
       knowledgePotential: {
         reusableQuestion: true,
         mechanismIncrement: relevant,
@@ -35,5 +37,9 @@ export class FixtureModelProvider implements ModelProvider {
       },
       exclusions: [],
     };
+  }
+
+  async analyzeBatch(captures: CaptureEnvelope[], context: AnalysisContext): Promise<ModelAnalysis[]> {
+    return await Promise.all(captures.map((capture) => this.analyze(capture, context)));
   }
 }

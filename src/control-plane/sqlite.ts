@@ -10,6 +10,6 @@ export class LocalSqliteControlPlane implements ControlPlaneStore {
   async plan(records: CanonicalControlRecord[]): Promise<SyncPlan> {
     return { driver: this.driver, creates: [], updates: [], unchanged: records, conflicts: [], digest: createHash("sha256").update(canonicalJson(records)).digest("hex") };
   }
-  async apply(plan: SyncPlan): Promise<SyncResult> { return { driver: this.driver, created: 0, updated: 0, unchanged: plan.unchanged.length, failed: [], digest: plan.digest }; }
+  async apply(plan: SyncPlan): Promise<SyncResult> { return { driver: this.driver, created: 0, updated: 0, unchanged: plan.unchanged.length, failed: [], digest: plan.digest, acknowledged: true, readbackRevision: "local", readbackDigest: plan.digest }; }
   async close(): Promise<void> {}
 }

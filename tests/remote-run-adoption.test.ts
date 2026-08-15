@@ -16,7 +16,7 @@ const rules = [
 ];
 
 describe("production migration idempotence", () => {
-  it("adopts a terminal remote run and never replaces its existing documents", async () => {
+  it("refuses to adopt a legacy terminal run that has no publication commit or integrity manifest", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-remote-run-"));
     const configPath = await initializeProject({ directory: root, yes: true, processStore: { driver: "lark", baseToken: "base-test" } });
     const dailyPath = path.join(root, "briefs/Daily/2026-08-11-AI情报简报.md");
@@ -31,8 +31,8 @@ describe("production migration idempotence", () => {
       return { record_id_list: [], fields: [], data: [], has_more: false };
     };
 
-    const result = await runFormalProject(configPath, { now: new Date("2026-08-11T02:20:00Z"), larkRunner: runner });
-    expect(result).toMatchObject({ runId: "RUN-20260811-DAILY", outcome: "partial", alreadyComplete: true, remoteExisting: true });
+    await expect(runFormalProject(configPath, { now: new Date("2026-08-11T02:20:00Z"), larkRunner: runner }))
+      .rejects.toThrow("not a published terminal run");
     expect(await readFile(dailyPath, "utf8")).toContain("existing daily");
     expect(await readFile(reviewPath, "utf8")).toContain("existing review");
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { countReceipts, runOutcome } from "../src/core/accounting.js";
+import { countReceipts, formalRunOutcome, runOutcome } from "../src/core/accounting.js";
 
 describe("due-source accounting", () => {
   it("treats an intentional zero-due run as successful", () => {
@@ -36,5 +36,16 @@ describe("due-source accounting", () => {
     expect(() => countReceipts(["A"], [{ sourceId: "B", result: "updated" }])).toThrow(
       "not due",
     );
+  });
+
+  it.each([
+    [{ receiptOutcome: "success", modelFailureCount: 0, selectedItemCount: 2, processStoreValid: true }, "success"],
+    [{ receiptOutcome: "partial", modelFailureCount: 0, selectedItemCount: 1, processStoreValid: true }, "partial"],
+    [{ receiptOutcome: "success", modelFailureCount: 0, selectedItemCount: 0, processStoreValid: true }, "empty"],
+    [{ receiptOutcome: "partial", modelFailureCount: 0, selectedItemCount: 0, processStoreValid: true }, "failed"],
+    [{ receiptOutcome: "success", modelFailureCount: 1, selectedItemCount: 0, processStoreValid: true }, "failed"],
+    [{ receiptOutcome: "success", modelFailureCount: 0, selectedItemCount: 2, processStoreValid: false }, "failed"],
+  ] as const)("derives the formal product outcome independently from pipeline mechanics", (input, expected) => {
+    expect(formalRunOutcome(input)).toBe(expected);
   });
 });

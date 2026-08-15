@@ -5,6 +5,7 @@ import { XMLParser } from "fast-xml-parser";
 import type { SourceDefinition } from "../config/types.js";
 import { assertPublicHttpsUrl, readTextLimited } from "./http.js";
 import { retainExcerpt } from "./retention.js";
+import { normalizeExternalKey } from "./scalars.js";
 import type { CaptureEnvelope, Connector, ConnectorContext } from "./types.js";
 
 type RssSource = SourceDefinition & {
@@ -14,8 +15,8 @@ type RssSource = SourceDefinition & {
 interface FeedItem {
   title?: string;
   link?: string | { "@_href"?: string; "@_rel"?: string } | Array<{ "@_href"?: string; "@_rel"?: string }>;
-  guid?: string;
-  id?: string;
+  guid?: unknown;
+  id?: unknown;
   description?: string;
   summary?: string;
   pubDate?: string;
@@ -108,7 +109,7 @@ export class RssConnector implements Connector<RssSource> {
       } catch {
         return [];
       }
-      const externalKey = item.guid ?? item.id ?? url;
+      const externalKey = normalizeExternalKey(url, item.guid, item.id);
       const content = `${title}\n${item.description ?? item.summary ?? ""}`;
       const analysisText = textContentForAnalysis(item.description ?? item.summary);
       const publishedAt = item.pubDate ?? item.published ?? item.updated;

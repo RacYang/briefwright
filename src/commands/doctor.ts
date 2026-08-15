@@ -18,6 +18,35 @@ export interface DoctorCheck {
   blocking?: boolean;
 }
 
+export interface DoctorDependencies {
+  httpClientFactory?: typeof createHttpClient;
+  modelProviderFactory?: typeof providerFor;
+}
+
+export function doctorReport(checks: DoctorCheck[]): { ok: boolean; command: "doctor"; checks: DoctorCheck[] } {
+  return {
+    ok: checks.every((check) => check.ok || check.blocking === false),
+    command: "doctor",
+    checks,
+  };
+}
+
+function errorDetail(error: unknown): string {
+  const details: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null && !seen.has(current); depth += 1) {
+    seen.add(current);
+    details.push(current instanceof Error ? current.message : String(current));
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return details.filter(Boolean).join("; caused by: ") || "Unknown error";
+}
+
+function requiresExternalCapture(source: { connector: { type: string } }): boolean {
+  return source.connector.type === "codex-browser" || source.connector.type === "in-app-browser" || source.connector.type === "computer-use";
+}
+
 async function writableAncestor(projectRoot: string, target: string): Promise<string> {
   let current = target;
   for (;;) {
@@ -36,7 +65,11 @@ async function writableAncestor(projectRoot: string, target: string): Promise<st
   }
 }
 
-export async function runDoctor(configPath: string, options: { online?: boolean; allSources?: boolean } = {}): Promise<DoctorCheck[]> {
+export async function runDoctor(
+  configPath: string,
+  options: { online?: boolean; allSources?: boolean } = {},
+  dependencies: DoctorDependencies = {},
+): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
   let config;
   try {
@@ -100,7 +133,7 @@ export async function runDoctor(configPath: string, options: { online?: boolean;
     try { checks.push(...await controlPlane.doctor()); } finally { await controlPlane.close(); }
     try { onlineConfig = (await hydrateControlPlaneContext(config)).config; checks.push({ name: "control-plane-context", ok: true, detail: `${onlineConfig.preset.sources.length} enabled sources and ${onlineConfig.policy.rules.length} active rules loaded` }); }
     catch (error) { checks.push({ name: "control-plane-context", ok: false, detail: error instanceof Error ? error.message : String(error) }); }
-    const provider = await providerFor(onlineConfig.provider).check({ interests: onlineConfig.interests, domains: onlineConfig.policy.domains, prompt: onlineConfig.prompts, provider: onlineConfig.provider, projectRoot: onlineConfig.projectRoot });
+    const provider = await (dependencies.modelProviderFactory ?? providerFor)(onlineConfig.provider).check({ interests: onlineConfig.interests, domains: onlineConfig.policy.domains, prompt: onlineConfig.prompts, provider: onlineConfig.provider, projectRoot: onlineConfig.projectRoot });
     checks.push({ name: `provider:${onlineConfig.provider.id}`, ...provider });
     const now = new Date();
     const sources = options.allSources ? onlineConfig.preset.sources : onlineConfig.preset.sources.filter((source) => {
@@ -112,16 +145,36 @@ export async function runDoctor(configPath: string, options: { online?: boolean;
     });
     checks.push({ name: "source-check-scope", ok: true, detail: `${sources.length}/${onlineConfig.preset.sources.length} ${options.allSources ? "enabled" : "currently due"} sources checked` });
     const allowedHosts = sources.flatMap(allowedHostsForSource);
-    const fetchClient = createHttpClient({ timeoutSeconds: onlineConfig.runtime.timeoutSeconds, retries: 0, allowedHosts });
+    const fetchClient = (dependencies.httpClientFactory ?? createHttpClient)({ timeoutSeconds: onlineConfig.runtime.timeoutSeconds, retries: 0, allowedHosts });
     const sourceChecks = new Array<DoctorCheck>(sources.length); let next = 0;
     const workers = Array.from({ length: Math.min(onlineConfig.runtime.httpConcurrency, sources.length) }, async () => {
       for (;;) {
         const index = next++; const source = sources[index]; if (!source) return;
-        try { const result = await connectorFor(source).check(source, { fetch: fetchClient, now: () => new Date(), projectRoot: onlineConfig.projectRoot }); sourceChecks[index] = { name: `connector:${source.id}`, ...result, blocking: false }; }
-        catch (error) { sourceChecks[index] = { name: `connector:${source.id}`, ok: false, detail: error instanceof Error ? error.message : String(error), blocking: false }; }
+        const externalCapture = requiresExternalCapture(source);
+        try {
+          const result = await connectorFor(source).check(source, { fetch: fetchClient, now: () => new Date(), projectRoot: onlineConfig.projectRoot });
+          sourceChecks[index] = { name: `connector:${source.id}`, ...result, ...(result.ok || !externalCapture ? {} : { blocking: false }) };
+        } catch (error) {
+          sourceChecks[index] = { name: `connector:${source.id}`, ok: false, detail: errorDetail(error), ...(externalCapture ? { blocking: false } : {}) };
+        }
       }
     });
-    try { await Promise.all(workers); checks.push(...sourceChecks); } finally { await fetchClient.close(); }
+    try {
+      await Promise.all(workers);
+      checks.push(...sourceChecks);
+    } finally {
+      try {
+        const cleanup = await fetchClient.close();
+        checks.push({
+          name: "connector-http-cleanup",
+          ok: cleanup.mode === "graceful",
+          detail: cleanup.detail,
+          ...(cleanup.mode === "graceful" ? {} : { blocking: false }),
+        });
+      } catch (error) {
+        checks.push({ name: "connector-http-cleanup", ok: false, detail: errorDetail(error), blocking: false });
+      }
+    }
   }
   return checks;
 }

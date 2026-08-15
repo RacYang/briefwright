@@ -23,6 +23,7 @@ export interface BriefingIntent {
     profile?: string;
     identity?: "user" | "bot";
     xCapture?: "api" | "codex-browser";
+    maximumRecordsPerTable?: number;
     tables?: Partial<LarkTableMapping>;
     connection?: SecretReference;
   };
@@ -75,6 +76,11 @@ export interface PolicyDefinition {
   };
   domains: string[];
   retention: { quoteWordLimit: number };
+  freshness?: {
+    dailyMaximumAgeHours: number;
+    reviewMaximumAgeHours: number;
+    futureToleranceHours: number;
+  };
 }
 
 export interface PromptPackDefinition {
@@ -153,6 +159,14 @@ export interface SourceDefinition {
         config: { username: string };
       }
     | {
+        type: "in-app-browser";
+        config: { url: string; allowedHosts?: string[] };
+      }
+    | {
+        type: "computer-use";
+        config: { url: string; allowedHosts?: string[] };
+      }
+    | {
         type: "extension";
         config: { adapter: string; options: Record<string, unknown> };
       };
@@ -193,6 +207,7 @@ export interface EffectiveConfig {
       identity: "user" | "bot";
       tables: LarkTableMapping;
       xCapture: "api" | "codex-browser";
+      maximumRecordsPerTable?: number;
     };
     connection?: SecretReference;
   };

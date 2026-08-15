@@ -242,13 +242,14 @@ function validatePackagedResources(
   try {
     const validate = new Ajv2020({ allErrors: true, strict: true }).compile(prompts.outputSchema);
     const validProbe = {
-      summary: "summary", whyItMatters: "reason", domain: "Agent", claims: ["claim"],
+      title: "Specific update title", summary: "summary", whyItMatters: "reason", domain: "Agent", claims: ["claim"],
+      claimEvidence: [{ claimIndex: 0, excerpt: "claim" }],
       knowledgePotential: { reusableQuestion: true, mechanismIncrement: true, durableWithoutVersion: true, reason: "reason" },
       scores: Object.fromEntries(["authority", "evidence", "relevance", "impact", "novelty", "recency", "actionability"].map((id) => [id, { value: 3, reason: "reason" }])),
       exclusions: [],
     };
     if (!validate(validProbe)) throw new Error("schema rejects the canonical analysis shape");
-    for (const field of ["summary", "whyItMatters", "domain", "claims", "knowledgePotential", "scores", "exclusions"] as const) {
+    for (const field of ["title", "summary", "whyItMatters", "domain", "claims", "claimEvidence", "knowledgePotential", "scores", "exclusions"] as const) {
       const invalid = structuredClone(validProbe) as Record<string, unknown>;
       delete invalid[field];
       if (validate(invalid)) throw new Error(`schema does not require ${field}`);
@@ -300,6 +301,18 @@ export function validateEffectiveConfig(config: EffectiveConfig): void {
       if (source.connector.config.bearerToken.provider === "env" && !/^[A-Z][A-Z0-9_]*$/.test(source.connector.config.bearerToken.key)) problems.push(`${source.id} has invalid X env secret reference`);
     }
     if (source.connector.type === "codex-browser" && !/^[A-Za-z0-9_]{1,15}$/.test(source.connector.config.username)) problems.push(`${source.id} has invalid browser-capture username`);
+    if (source.connector.type === "computer-use" || source.connector.type === "in-app-browser") {
+      const label = source.connector.type === "computer-use" ? "Computer Use" : "In-app Browser";
+      let entryHost: string | undefined;
+      try {
+        const entry = new URL(source.connector.config.url);
+        entryHost = entry.hostname.toLowerCase();
+        if (entry.protocol !== "https:" || entry.username || entry.password || entry.hash) problems.push(`${source.id} ${label} URL must be clean HTTPS without credentials or a fragment`);
+      } catch { problems.push(`${source.id} has invalid ${label} URL`); }
+      const hosts = source.connector.config.allowedHosts;
+      if (hosts && (!hosts.length || hosts.length > 10 || hosts.some((host) => !/^[A-Za-z0-9.-]+$/.test(host)))) problems.push(`${source.id} has invalid ${label} allowedHosts`);
+      if (hosts && entryHost && !hosts.map((host) => host.toLowerCase()).includes(entryHost)) problems.push(`${source.id} ${label} allowedHosts must include the entry URL host`);
+    }
     if (source.connector.type === "extension") {
       if (!/^[a-z][a-z0-9-]*$/.test(source.connector.config.adapter)) problems.push(`${source.id} has invalid extension adapter`);
       const hosts = source.connector.config.options.allowedHosts;
@@ -423,7 +436,7 @@ function compileProcessStore(intent: BriefingIntent["processStore"]): EffectiveC
     if (!intent.baseToken) throw new ConfigurationError("Lark process store requires baseToken");
     return { driver: "lark", mode: "configured", lark: {
       baseToken: intent.baseToken, identity: intent.identity ?? "user", tables: { ...STANDARD_LARK_TABLES, ...intent.tables },
-      xCapture: intent.xCapture ?? "api",
+      xCapture: intent.xCapture ?? "api", maximumRecordsPerTable: intent.maximumRecordsPerTable ?? 2000,
       ...(intent.profile ? { profile: intent.profile } : {}),
     } };
   }
@@ -460,6 +473,32 @@ export function canonicalJson(value: unknown): string {
   return value === undefined ? "null" : JSON.stringify(value);
 }
 
+export const EXECUTION_CONFIG_DIGEST_VERSION = 2;
+
+/**
+ * Project an effective configuration onto the values that can change execution semantics.
+ * Control-plane scan timestamps and the aggregate remote revision are observations of prior
+ * execution, not configuration. Cadence, frequency, and human locks remain part of the digest.
+ * Starting from the full object makes newly added fields fail closed unless explicitly classified
+ * as derived runtime state here.
+ */
+export function executionConfigProjection(config: EffectiveConfig): EffectiveConfig {
+  const projected = structuredClone(config);
+  for (const source of projected.preset.sources) {
+    if (!source.scheduleState) continue;
+    delete source.scheduleState.lastScanAt;
+    delete source.scheduleState.lastSuccessAt;
+    delete source.scheduleState.lastEffectiveUpdateAt;
+    delete source.scheduleState.nextScanAt;
+    if (Object.keys(source.scheduleState).length === 0) delete source.scheduleState;
+  }
+  delete projected.provenance.controlPlaneRevision;
+  return projected;
+}
+
 export function configDigest(config: EffectiveConfig): string {
-  return createHash("sha256").update(canonicalJson(config)).digest("hex");
+  return createHash("sha256")
+    .update(`briefwright-execution-config-v${EXECUTION_CONFIG_DIGEST_VERSION}\n`)
+    .update(canonicalJson(executionConfigProjection(config)))
+    .digest("hex");
 }

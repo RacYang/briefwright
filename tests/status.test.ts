@@ -18,6 +18,7 @@ describe("project status", () => {
     const before = await projectStatus(configPath);
     expect(before.scheduleEnabled).toBe(false);
     expect(before.latestRun).toBeNull();
+    expect(before.recoveries).toEqual([]);
     await expect(latestArtifactPath(configPath)).rejects.toThrow("Run 'briefwright preview'");
 
     const preview = await previewProject(configPath);
@@ -28,6 +29,7 @@ describe("project status", () => {
       artifactPath: preview.outputPath,
       failed: 0,
     });
+    expect(after.recoveries).toEqual([]);
     await expect(latestArtifactPath(configPath)).resolves.toBe(preview.outputPath);
     await expect(verifyReplay(configPath, after.latestRun!.runId)).resolves.toMatchObject({
       matches: true,

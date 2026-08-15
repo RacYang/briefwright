@@ -103,6 +103,7 @@ export async function setupProject(options: SetupOptions): Promise<{ configPath:
     ...(processStore === "lark" ? [`briefwright lark provision --yes --config ${configPath}`] : []),
     ...(processStore === "postgres" || processStore === "mysql" ? [`briefwright sql provision --yes --config ${configPath}`] : []),
     `briefwright doctor --config ${configPath}`, `briefwright preview --config ${configPath}`, `briefwright preview --live --config ${configPath}`,
+    `briefwright preview --live --editorial --config ${configPath}`,
     `briefwright doctor --online --config ${configPath}`, `briefwright run --config ${configPath}`,
     ...(schedule === "manual" ? [] : [`briefwright schedule enable --yes --config ${configPath}`]),
   ] };

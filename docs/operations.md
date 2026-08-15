@@ -56,18 +56,33 @@ records.
 Do not edit it manually. Use `db migrate`, `status`, and `replay`. Replay is offline and validates all
 artifacts recorded for a run, including current-disk tampering.
 
+For an exact incomplete legacy run, `db quarantine RUN-ID` is a read-only preview. After reviewing
+the listed files, `db quarantine RUN-ID --write --yes` copies every existing, hash-matching formal
+artifact into `.briefwright/quarantine`, writes a recovery manifest, checkpoints and backs up SQLite,
+then marks the run withheld. A stale run with no result and no artifacts is marked abandoned instead.
+Published and successful runs, non-formal artifacts, paths outside the configured document output,
+and hash mismatches fail closed. The command never edits the remote process store.
+Quarantined lineages cannot be resumed, retried, or evidence-reverified accidentally. `status`
+lists only non-terminal formal runs that still require an operator recovery decision.
+
 ## Scheduling
 
-Before enablement, run a live preview of the current configuration and an online doctor check. A
-matching live preview must be at most seven days old and its artifact must still match the recorded
-hash. Then run `schedule describe` before `schedule enable --yes`. The installer records native and
+Before enablement, run a source-connectivity preview, a real-model editorial shadow, and an online
+doctor check. Only `preview --live --editorial` is a content-quality gate: it analyzes a bounded,
+diversified sample with the configured model, applies the normal evidence and selection policy, and
+writes only beneath `.briefwright/previews`. A matching editorial shadow must contain at least one
+Daily or Review item, have no model failures, be at most seven days old, and still match its recorded
+artifact hash. Then run `schedule describe` before `schedule enable --yes`. The installer records native and
 SQLite state transactionally and restores the previous native task if recording fails. `schedule
 status` reports native-state drift. Config changes affect the next run; an in-progress run retains
 its frozen snapshot. Disable with `schedule disable --yes` before moving a project directory or
 executable.
 
 `schedule codex` is an export, not an installer. Its prompt binds SHA-256 digests for `briefing.yaml`,
-the exact built CLI, the packaged protocol, and an optional imported source contract. If X browser
+the CLI entrypoint, the content digest of the complete installed runtime tree and resolved dependencies,
+the packaged protocol, and an optional imported source contract. It also requires
+`config render` to reproduce the frozen effective-configuration digest, which covers packaged policy,
+prompt, provider, preset and execution settings that a CLI-file hash alone cannot bind. If X browser
 capture is configured, it first emits the currently due manifest and validates the resulting
 read-only bundle. A zero-source manifest requires no bundle. Any digest drift stops the task for
 review instead of silently running different code or rules.

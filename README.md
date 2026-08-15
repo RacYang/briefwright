@@ -57,6 +57,9 @@ mkdir my-briefing
 cd my-briefing
 briefwright setup
 briefwright preview --live
+briefwright preview --live --editorial
+# Isolated incident replay: only the supplied bundle is eligible.
+briefwright preview --live --editorial --capture-bundle /path/to/bundle.json --bundle-only
 briefwright doctor --online
 briefwright run
 ```
@@ -70,7 +73,7 @@ briefwright run
 | AI provider | Codex, OpenAI, Anthropic, Gemini, Qwen, Ollama, compatible providers | Selected during setup; required for formal runs |
 | Process data | Feishu Base through `lark-cli`, PostgreSQL, MySQL, SQLite | Feishu recommended for teams; SQLite fallback |
 | Documents | Obsidian, local folder | Obsidian recommended; local-folder fallback |
-| Sources | RSS, GitHub Releases, webpages, X API, Codex browser capture, custom connectors | Enabled by the selected preset and project config |
+| Sources | RSS, GitHub Releases, webpages, X API, Codex browser capture, governed Computer Use, custom connectors | Enabled by the selected preset and project config |
 | Scheduling | Codex automation, launchd, cron, Windows Task Scheduler | Manual until explicitly enabled |
 
 Secrets are stored as environment or file references. They are not written into `briefing.yaml`, run snapshots, logs, or generated documents.
@@ -160,6 +163,7 @@ mkdir my-briefing
 cd my-briefing
 briefwright setup
 briefwright preview --live
+briefwright preview --live --editorial
 briefwright doctor --online
 briefwright run
 ```
@@ -173,7 +177,7 @@ briefwright run
 | AI Provider | Codex、OpenAI、Anthropic、Gemini、千问、Ollama、兼容 Provider | setup 时选择；正式运行必须配置 |
 | 过程数据 | 通过 `lark-cli` 接入飞书 Base、PostgreSQL、MySQL、SQLite | 团队推荐飞书；默认降级 SQLite |
 | 文档 | Obsidian、普通本地文件夹 | 推荐 Obsidian；默认降级本地文件夹 |
-| 数据源 | RSS、GitHub Releases、网页、X API、Codex 浏览器采集、自定义连接器 | 由预设与项目配置启用 |
+| 数据源 | RSS、GitHub Releases、网页、X API、Codex 浏览器采集、受控 Computer Use、自定义连接器 | 由预设与项目配置启用 |
 | 调度 | Codex 自动任务、launchd、cron、Windows 任务计划 | 默认手动，明确启用后才运行 |
 
 凭证只以环境变量或本地文件引用保存，不会写入 `briefing.yaml`、运行快照、日志或生成文档。

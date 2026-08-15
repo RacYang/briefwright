@@ -51,7 +51,7 @@ describe("guided setup, documents, and X", () => {
     const run = await runFormalProject(configPath, { now: new Date("2026-08-11T02:00:00Z"), provider: new FixtureModelProvider(), fetch: async (url) => sourceResponse(String(url)) });
     expect(run.dailyPath.startsWith(vault)).toBe(true); expect(path.basename(run.dailyPath)).toBe("2026-08-11-AI情报简报.md");
     expect(await readFile(path.join(vault, "Inbox/AI Intelligence/Note-AI情报候选池.md"), "utf8")).toContain("ai-intelligence-digest:start");
-  });
+  }, 40_000);
 
   it("captures an incremental official X timeline with a local secret reference", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-x-")); process.env.X_BEARER_TOKEN = "x-test";

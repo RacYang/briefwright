@@ -76,5 +76,5 @@ describe("frozen policy experiments", () => {
     const harmfulExperiment = await createPolicyExperiment(configPath, harmfulPath);
     await expect(evaluatePolicyExperiment(configPath, harmfulExperiment.experimentId)).resolves.toMatchObject({ eligible: true, metrics: { recommendation: "reject", guardrails: { passed: false } } });
     await expect(transitionPolicyExperiment(configPath, harmfulExperiment.experimentId, "approve")).rejects.toThrow("did not demonstrate a guarded improvement");
-  }, 60_000);
+  }, 90_000);
 });

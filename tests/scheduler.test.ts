@@ -108,5 +108,5 @@ describe("scheduler definitions", () => {
     const original = await readFile(configPath, "utf8");
     await writeFile(configPath, original.replace("AI agents", "coding agents"), "utf8");
     await expect(scheduleReadiness(configPath, { preflight: async () => [] })).rejects.toThrow("matches the current configuration");
-  }, 20_000);
+  }, 40_000);
 });

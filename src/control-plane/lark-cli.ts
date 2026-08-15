@@ -16,14 +16,16 @@ function wait(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-export function systemLarkRunner(profile?: string, options: { timeoutMs?: number; readRetries?: number; retryDelayMs?: number } = {}): LarkRunner {
+export function systemLarkRunner(profile?: string, options: { timeoutMs?: number; readRetries?: number; retryDelayMs?: number; executable?: string; prefixArgs?: string[] } = {}): LarkRunner {
   const timeoutMs = options.timeoutMs ?? 120_000;
   const readRetries = options.readRetries ?? 4;
   const retryDelayMs = options.retryDelayMs ?? 250;
+  const executable = options.executable ?? "lark-cli";
+  const prefixArgs = options.prefixArgs ?? [];
   return (args) => {
-    const command = [...args, ...(profile ? ["--profile", profile] : [])];
+    const command = [...prefixArgs, ...args, ...(profile ? ["--profile", profile] : [])];
     for (let attempt = 0; ; attempt += 1) {
-      const result = spawnSync("lark-cli", command, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, killSignal: "SIGKILL" });
+      const result = spawnSync(executable, command, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs, killSignal: "SIGKILL" });
       let failure: Error | undefined;
       if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") failure = new Error(`lark-cli timed out after ${timeoutMs} ms`);
       else if (result.error) failure = result.error;

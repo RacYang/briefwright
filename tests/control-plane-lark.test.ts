@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { auditLarkControlPlane, LarkControlPlaneStore, larkFields, larkSource, provisionLarkControlPlane } from "../src/control-plane/lark.js";
+import { auditLarkControlPlane, chunksByJsonBytes, LarkControlPlaneStore, larkFields, larkSource, provisionLarkControlPlane } from "../src/control-plane/lark.js";
 import { LARK_FIELD_INVENTORY, LARK_FIELD_MANIFEST } from "../src/control-plane/lark-field-manifest.js";
 import { reconciliationRecords } from "../src/control-plane/registry.js";
 import type { LarkFieldDefinition, LarkRunner } from "../src/control-plane/lark-cli.js";
@@ -10,6 +10,12 @@ import type { CanonicalControlRecord, SyncPlan } from "../src/control-plane/type
 const tables = Object.fromEntries(["sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts"].map((kind) => [kind, `tbl_${kind}`])) as unknown as LarkTableMapping;
 
 describe("Lark control plane", () => {
+  it("splits CLI record batches by serialized bytes as well as row count", () => {
+    const values = ["a".repeat(40), "b".repeat(40), "c".repeat(40)];
+    expect(chunksByJsonBytes(values, (batch) => ({ update_records: batch }), 100, 200)).toEqual([[values[0]], [values[1]], [values[2]]]);
+    expect(chunksByJsonBytes([1, 2, 3], (batch) => batch, 1_000, 2)).toEqual([[1, 2], [3]]);
+  });
+
   it("fails the read-only audit for an unrecognized production field or blank core value", () => {
     const kindByTable = new Map(Object.entries(tables).map(([kind, table]) => [table, kind as keyof typeof LARK_FIELD_MANIFEST]));
     const runner: LarkRunner = (args) => {

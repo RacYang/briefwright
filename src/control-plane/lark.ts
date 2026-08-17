@@ -14,6 +14,7 @@ const SCALAR_LARK_FIELDS = LARK_SCALAR_FIELDS;
 const LINK_LARK_FIELDS = LARK_LINK_FIELDS;
 
 const LARK_BATCH_LIMIT = 200;
+const LARK_SAFE_CLI_JSON_BYTES = 64 * 1024;
 
 function first(value: unknown): string | undefined {
   if (typeof value === "string") return value;
@@ -544,6 +545,25 @@ function chunks<T>(values: T[], maximum = LARK_BATCH_LIMIT): T[][] {
   return Array.from({ length: Math.ceil(values.length / maximum) }, (_value, index) => values.slice(index * maximum, (index + 1) * maximum));
 }
 
+export function chunksByJsonBytes<T>(
+  values: T[],
+  serialize: (batch: T[]) => unknown,
+  maximumBytes = LARK_SAFE_CLI_JSON_BYTES,
+  maximumCount = LARK_BATCH_LIMIT,
+): T[][] {
+  const result: T[][] = [];
+  let current: T[] = [];
+  for (const value of values) {
+    const candidate = [...current, value];
+    if (current.length && (candidate.length > maximumCount || Buffer.byteLength(JSON.stringify(serialize(candidate)), "utf8") > maximumBytes)) {
+      result.push(current);
+      current = [value];
+    } else current = candidate;
+  }
+  if (current.length) result.push(current);
+  return result;
+}
+
 export interface LarkProvisionResult {
   tables: Record<ControlEntityKind, string>;
   createdTables: string[];
@@ -879,34 +899,38 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     };
     let scalarWriteFailed = false;
     createKinds: for (const kind of [...new Set(plan.creates.map((record) => record.kind))]) {
-      for (const batch of chunks(plan.creates.filter((record) => record.kind === kind))) {
+      const available = new Set(schemaByKind.get(kind)!.keys());
+      const prepared = plan.creates.filter((record) => record.kind === kind)
+        .map((record) => ({ record, fields: writableLarkFields(kind, larkFields(record), available) }));
+      for (const batch of chunksByJsonBytes(prepared, (entries) => ({ create_records: entries.map(({ fields }) => fields) }))) {
         try {
-          const available = new Set(schemaByKind.get(kind)!.keys());
-          const response = this.client.batchCreate(this.config.tables[kind], batch.map((record) => writableLarkFields(kind, larkFields(record), available)));
+          const response = this.client.batchCreate(this.config.tables[kind], batch.map(({ fields }) => fields));
           const object = response && typeof response === "object" ? response as Record<string, unknown> : {};
           const ids = Array.isArray(object.record_id_list) ? object.record_id_list.filter((id): id is string => typeof id === "string" && Boolean(id))
             : Array.isArray(object.recordIdList) ? object.recordIdList.filter((id): id is string => typeof id === "string" && Boolean(id)) : [];
           if (ids.length !== batch.length) throw new Error(`lark-cli returned ${ids.length}/${batch.length} record IDs for ${kind}`);
-          batch.forEach((record, ordinal) => {
+          batch.forEach(({ record }, ordinal) => {
             const storeRecordId = ids[ordinal]!; index[kind]!.set(record.id, storeRecordId); completed.set(key(record), { ...record, storeRecordId });
           });
         } catch (error) {
           const detail = `record create failed: ${error instanceof Error ? error.message : String(error)}`;
-          for (const record of batch) failed.push({ kind: record.kind, id: record.id, detail });
+          for (const { record } of batch) failed.push({ kind: record.kind, id: record.id, detail });
           scalarWriteFailed = true;
           break createKinds;
         }
       }
     }
     updateKinds: for (const kind of scalarWriteFailed ? [] : [...new Set(plan.updates.map((record) => record.kind))]) {
-      for (const batch of chunks(plan.updates.filter((record) => record.kind === kind))) {
+      const available = new Set(schemaByKind.get(kind)!.keys());
+      const prepared = plan.updates.filter((record) => record.kind === kind)
+        .map((record) => ({ record, fields: writableLarkFields(kind, larkFields(record), available) }));
+      for (const batch of chunksByJsonBytes(prepared, (entries) => ({ update_records: Object.fromEntries(entries.map(({ record, fields }) => [record.storeRecordId!, fields])) }))) {
         try {
-          const available = new Set(schemaByKind.get(kind)!.keys());
-          this.client.batchUpdate(this.config.tables[kind], Object.fromEntries(batch.map((record) => [record.storeRecordId!, writableLarkFields(kind, larkFields(record), available)])));
-          for (const record of batch) completed.set(key(record), record);
+          this.client.batchUpdate(this.config.tables[kind], Object.fromEntries(batch.map(({ record, fields }) => [record.storeRecordId!, fields])));
+          for (const { record } of batch) completed.set(key(record), record);
         } catch (error) {
           const detail = `record update failed: ${error instanceof Error ? error.message : String(error)}`;
-          for (const record of batch) failed.push({ kind: record.kind, id: record.id, detail });
+          for (const { record } of batch) failed.push({ kind: record.kind, id: record.id, detail });
           scalarWriteFailed = true;
           break updateKinds;
         }
@@ -928,7 +952,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
           return [];
         }
       });
-      for (const batch of chunks(prepared)) {
+      for (const batch of chunksByJsonBytes(prepared, (entries) => ({ update_records: Object.fromEntries(entries.map(({ record, fields }) => [record.storeRecordId!, fields])) }))) {
         try {
           this.client.batchUpdate(this.config.tables[kind], Object.fromEntries(batch.map(({ record, fields }) => [record.storeRecordId!, fields])));
         } catch (error) {

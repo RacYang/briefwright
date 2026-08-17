@@ -175,11 +175,20 @@ function jsonObject(value: unknown): Record<string, unknown> {
 
 function jsonText(value: unknown): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
+  let text: string;
   if (typeof value === "string") {
-    try { return canonicalJson(JSON.parse(value)); }
-    catch { return value; }
-  }
-  return canonicalJson(value);
+    try { text = canonicalJson(JSON.parse(value)); }
+    catch { text = value; }
+  } else text = canonicalJson(value);
+  const originalBytes = Buffer.byteLength(text, "utf8");
+  if (originalBytes <= 24 * 1024) return text;
+  return canonicalJson({
+    oversized: true,
+    originalBytes,
+    sha256: createHash("sha256").update(text).digest("hex"),
+    preview: text.slice(0, 2_048),
+    storage: "local-runtime-journal",
+  });
 }
 
 function connectorConfigForControlPlane(source: SourceDefinition): Record<string, unknown> {

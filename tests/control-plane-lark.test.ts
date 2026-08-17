@@ -16,6 +16,15 @@ describe("Lark control plane", () => {
     expect(chunksByJsonBytes([1, 2, 3], (batch) => batch, 1_000, 2)).toEqual([[1, 2], [3]]);
   });
 
+  it("projects oversized JSON as an explicit digest envelope instead of exceeding the CLI argument limit", () => {
+    const fields = larkFields({ kind: "events", id: "EVT-LARGE", payload: {
+      payload_json: JSON.stringify({ failures: "x".repeat(100_000) }), event_type: "control-plane.partial", stage: "persist",
+    } });
+    expect(String(fields["完整载荷 JSON"])).toContain('"oversized":true');
+    expect(String(fields["完整载荷 JSON"])).toContain('"storage":"local-runtime-journal"');
+    expect(Buffer.byteLength(JSON.stringify(fields), "utf8")).toBeLessThan(64 * 1024);
+  });
+
   it("fails the read-only audit for an unrecognized production field or blank core value", () => {
     const kindByTable = new Map(Object.entries(tables).map(([kind, table]) => [table, kind as keyof typeof LARK_FIELD_MANIFEST]));
     const runner: LarkRunner = (args) => {

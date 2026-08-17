@@ -133,10 +133,14 @@ export class CodexExecProvider implements ModelProvider {
     let last: unknown;
     for (let attempt = 0; attempt <= context.provider.retries; attempt += 1) {
       try {
+        const analysisDefinitions = context.prompt.outputSchema.$defs;
+        const legacyAnalysisDefinitions = context.prompt.outputSchema.definitions;
         const outputSchema = {
           type: "object",
           additionalProperties: false,
           required: ["results"],
+          ...(analysisDefinitions && typeof analysisDefinitions === "object" ? { $defs: analysisDefinitions } : {}),
+          ...(legacyAnalysisDefinitions && typeof legacyAnalysisDefinitions === "object" ? { definitions: legacyAnalysisDefinitions } : {}),
           properties: {
             results: {
               type: "array",

@@ -1,6 +1,7 @@
 import type { ProviderDefinition } from "../config/types.js";
 import { AnthropicMessagesProvider } from "./anthropic.js";
 import { CodexExecProvider } from "./codex.js";
+import { FixtureModelProvider } from "./fixture.js";
 import { OpenAICompatibleProvider } from "./openai-compatible.js";
 import type { ModelProvider } from "./types.js";
 
@@ -10,6 +11,7 @@ const factories = new Map<string, ModelProviderFactory>([
   ["openai-chat-completions", (definition) => new OpenAICompatibleProvider(definition.id)],
   ["anthropic-messages", () => new AnthropicMessagesProvider()],
   ["codex-exec", () => new CodexExecProvider()],
+  ["fixture", () => new FixtureModelProvider()],
 ]);
 
 export function registerModelProtocol(protocol: string, factory: ModelProviderFactory): () => void {

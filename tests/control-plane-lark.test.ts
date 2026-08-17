@@ -113,7 +113,7 @@ describe("Lark control plane", () => {
     const record: CanonicalControlRecord = { kind: "sources", id: "SRC-DYNAMIC", payload: { id: "SRC-DYNAMIC", title: "Dynamic", enabled: true, sourceType: "website", evidenceTier: "primary", coverageDomains: ["模型"], priority: 90,
       connector: { type: "webpage", config: { url: "https://example.com/news" } } } };
     const fields = larkFields(record);
-    expect(fields).toMatchObject({ "采集方式": "", "采集域名": "" });
+    expect(fields).toMatchObject({ "采集方式": "Webpage", "采集域名": "", "连接器类型": "webpage" });
     const plan = await new LarkControlPlaneStore({ baseToken: "base", identity: "user", tables }, runner).plan([record]);
     expect(plan.updates).toHaveLength(1);
   });
@@ -305,8 +305,8 @@ describe("Lark control plane", () => {
       if (args.includes("+field-list")) return { fields: [] };
       if (args.includes("+record-list")) {
         reads += 1;
-        return { record_id_list: ["rec_run"], fields: ["Run ID", "状态", "发布状态", "触发类型", "数据源数", "入围数"],
-          data: [["RUN-EVENTUAL", reads === 1 ? ["运行中"] : ["成功"], reads === 1 ? ["已扣留"] : ["已发布"], ["定时"], 0, 0]], has_more: false };
+        return { record_id_list: ["rec_run"], fields: ["Run ID", "状态", "发布状态", "触发类型", "数据源数", "入围数", "发布提交已确认", "Daily 条目数", "Review 条目数", "机器层条目数", "模型失败数", "分析积压数"],
+          data: [["RUN-EVENTUAL", reads === 1 ? ["运行中"] : ["成功"], reads === 1 ? ["已扣留"] : ["已发布"], ["定时"], 0, 0, reads > 1, 0, 0, 0, 0, 0]], has_more: false };
       }
       throw new Error(`unexpected call ${args.join(" ")}`);
     };
@@ -354,12 +354,18 @@ describe("Lark control plane", () => {
       if (args.includes("+field-list")) return { fields: [] };
       if (!args.includes("+record-list")) throw new Error(`unexpected call ${args.join(" ")}`);
       const table = args[args.indexOf("--table-id") + 1];
-      if (table === tables.sources) return { record_id_list: ["rec_source"], fields: ["Source ID", "名称", "状态", "来源类型", "入口 URL", "来源层级", "覆盖领域", "扫描频率", "调度状态", "最后扫描"],
-        data: [["SRC-STABLE", "Stable", ["启用"], ["官网"], "https://example.com", ["一手来源"], ["基础"], ["每日"], ["自动"], "2026-08-13T09:00:00+08:00"]], has_more: false };
-      if (table === tables.rules) return { record_id_list: ["rec_rule"], fields: ["Rule ID", "版本", "标题", "状态"],
-        data: [["RULE-WORKFLOW-V1.3", "1.3", "面向读者的中文治理标题", ["生效中"]]], has_more: false };
-      if (table === tables.captures) return { record_id_list: ["rec_capture"], fields: ["Capture ID", "发现 URL", "最终 URL", "Canonical 候选 URL", "发现渠道", "发现时间", "抓取时间", "抓取状态", "提取状态", "原始标题", "短摘录", "内容哈希", "载荷指纹"],
-        data: [["CAP-BLANK", "https://example.com/item", "https://example.com/item", "https://example.com/item", ["其他"], "2026-08-14T10:00:00+08:00", "2026-08-14T10:00:00+08:00", ["成功"], ["成功"], "Blank summary", null, "blank", "blank"]], has_more: false };
+      if (table === tables.sources) {
+        const expected = larkFields(sourceRecord); const fields = Object.keys(expected);
+        return { record_id_list: ["rec_source"], fields, data: [fields.map((field) => field === "最后扫描" ? "2026-08-13T09:00:00+08:00" : expected[field])], has_more: false };
+      }
+      if (table === tables.rules) {
+        const expected = larkFields(ruleRecord); const fields = Object.keys(expected);
+        return { record_id_list: ["rec_rule"], fields, data: [fields.map((field) => field === "标题" ? "面向读者的中文治理标题" : expected[field])], has_more: false };
+      }
+      if (table === tables.captures) {
+        const expected = larkFields(captureRecord); const fields = Object.keys(expected);
+        return { record_id_list: ["rec_capture"], fields, data: [fields.map((field) => expected[field] === "" ? null : expected[field])], has_more: false };
+      }
       return { record_id_list: [], fields: [], data: [], has_more: false };
     };
     const store = new LarkControlPlaneStore({ baseToken: "base", identity: "user", tables }, runner);

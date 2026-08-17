@@ -39,9 +39,10 @@ describe("validated external browser captures", () => {
     const inbox = path.join(root, ".briefwright/inbox");
     await mkdir(inbox, { recursive: true });
     const bundle = path.join(inbox, "computer-use.json");
+    const longText = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
     const valid = { apiVersion: "briefwright.dev/external-captures/v1", generatedAt: "2026-08-11T02:00:00Z", sources: [{
       sourceId: "SRC-DYNAMIC-DOCS", status: "captured", captureMode: "computer-use",
-      captures: [{ url: "https://docs.example.com/releases/agent-v2#overview", title: "Agent v2", text: "Agent v2 adds a governed dynamic UI capture path.", publishedAt: "2026-08-11T01:00:00Z", dateKind: "event" as const }],
+      captures: [{ url: "https://docs.example.com/releases/agent-v2#overview", title: "Agent v2", text: longText, publishedAt: "2026-08-11T01:00:00Z", dateKind: "event" as const }],
     }] };
     await writeFile(bundle, JSON.stringify(valid));
     const loaded = await loadExternalCaptureBundle(config, bundle, new Date("2026-08-11T03:00:00Z"));
@@ -52,6 +53,8 @@ describe("validated external browser captures", () => {
       parserVersion: "computer-use-bundle-v1",
       publishedAt: "2026-08-11T01:00:00.000Z",
     }]);
+    expect(loaded.get("SRC-DYNAMIC-DOCS")?.captures[0]?.summary.split(" ")).toHaveLength(25);
+    expect(loaded.get("SRC-DYNAMIC-DOCS")?.captures[0]?.analysisText).toContain("word39");
 
     const pageUpdated = { ...valid, sources: [{ ...valid.sources[0], captures: [{ ...valid.sources[0]!.captures[0], dateKind: "page-updated" as const }] }] };
     await writeFile(bundle, JSON.stringify(pageUpdated));

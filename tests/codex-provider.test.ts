@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import Ajv2020 from "ajv/dist/2020.js";
 
 import { CodexExecProvider, codexExecArguments } from "../src/providers/codex.js";
 import type { AnalysisContext } from "../src/providers/types.js";
@@ -51,5 +52,27 @@ describe("Codex account provider", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]!.prompt).toContain("independently");
     expect(JSON.stringify(requests[0]!.outputSchema)).toContain("captureIndex");
+  });
+
+  it("keeps root-local prompt definitions resolvable after wrapping a batch response", async () => {
+    const provider = new CodexExecProvider(async (request) => {
+      expect(() => new Ajv2020({ strict: true }).compile(request.outputSchema)).not.toThrow();
+      expect(request.outputSchema).toMatchObject({ $defs: { scoredDimension: expect.any(Object) } });
+      return JSON.stringify({ results: [{ captureIndex: 0, analysis }] });
+    });
+    const outputSchema = {
+      type: "object", additionalProperties: false, required: Object.keys(analysis),
+      properties: {
+        title: { type: "string" }, summary: { type: "string" }, whyItMatters: { type: "string" }, domain: { type: "string" },
+        claims: { type: "array", items: { type: "string" } }, claimEvidence: { type: "array" }, knowledgePotential: { type: "object" },
+        scores: { type: "object", properties: { authority: { $ref: "#/$defs/scoredDimension" } } }, exclusions: { type: "array" },
+      },
+      $defs: { scoredDimension: { type: "object", properties: { value: { type: "number" }, reason: { type: "string" } } } },
+    };
+    const context = { interests: ["agents"], domains: ["Agent"], prompt: { id: "test", version: "1.0.0", system: "Evidence only.", outputSchema },
+      provider: { id: "codex", version: "1.0.0", protocol: "codex-exec", model: "gpt-5.6-sol", reasoningEffort: "high", baseUrl: "https://codex.local", timeoutSeconds: 60, retries: 0, endpointPolicy: { allowedHosts: ["codex.local"] } }, projectRoot: "/tmp" } satisfies AnalysisContext;
+    const capture = { sourceId: "SRC-TEST", externalKey: "1", canonicalUrl: "https://example.com/first", title: "first", summary: "Summary",
+      capturedAt: "2026-08-11T00:00:00Z", contentHash: "first", evidenceClass: "primary" as const, analysisText: "A checkpoint was added" };
+    await expect(provider.analyzeBatch([capture], context)).resolves.toMatchObject([{ title: analysis.title }]);
   });
 });

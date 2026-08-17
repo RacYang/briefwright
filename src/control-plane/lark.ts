@@ -2,101 +2,16 @@ import { createHash } from "node:crypto";
 
 import type { EffectiveConfig, RuleSnapshot, SourceDefinition } from "../config/types.js";
 import { canonicalJson } from "../config/load.js";
-import { LarkCliClient, systemLarkRunner, type LarkFieldDefinition, type LarkRunner } from "./lark-cli.js";
+import { LarkCliClient, systemLarkRunner, type LarkRunner } from "./lark-cli.js";
+import { LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION, LARK_ID_FIELDS, LARK_LINK_FIELDS, LARK_SCALAR_FIELDS } from "./lark-field-manifest.js";
 import type { CanonicalControlRecord, ControlEntityKind, ControlPlaneCheck, ControlPlaneSnapshot, ControlPlaneStore, SyncPlan, SyncResult } from "./types.js";
 
-const options = (...names: string[]) => names.map((name) => ({ name }));
-const DOMAIN_OPTIONS = ["基础", "机器学习与深度学习", "模型与生成式 AI", "数据与知识", "系统与工程", "安全与治理", "应用域", "Agent"];
-
-export const REQUIRED_LARK_FIELDS: Record<ControlEntityKind, string[]> = {
-  sources: ["Source ID", "名称", "状态", "来源类型", "入口 URL", "采集方式", "采集域名", "来源层级", "覆盖领域", "扫描频率", "优先级", "最后扫描", "最后成功", "最后有效更新", "下次扫描", "调度状态"],
-  runs: ["Run ID", "状态", "发布状态", "当前阶段", "触发类型", "工作流版本", "评分版本", "开始时间", "结束时间", "Obsidian 简报", "质量说明", "到期来源数", "到期清单摘要", "日报摘要", "待复核摘要"],
-  items: ["Item ID", "标题", "当前状态", "Canonical URL", "中文摘要", "为什么值得关注", "主领域", "证据状态", "总分", "评分版本"],
-  events: ["Event ID", "事件时间", "原状态", "新状态", "执行者", "迁移原因", "Rule ID 快照", "幂等键", "载荷指纹", "尝试次数", "错误码", "运行批次", "规则记录"],
-  feedback: ["Feedback ID", "反馈时间", "判断", "原因标签", "反馈说明", "价值评分", "整合目标", "情报条目", "运行批次"],
-  experiments: ["Experiment ID", "标题", "状态", "观察到的问题", "假设", "变更类型", "基线 Rule IDs", "候选 Rule IDs", "实验指标", "实验结论", "回滚条件", "审批结果"],
-  captures: ["Capture ID", "发现 URL", "最终 URL", "Canonical 候选 URL", "发现渠道", "发现时间", "抓取时间", "抓取状态", "提取状态", "HTTP 状态码", "尝试次数", "内容类型", "语言", "原始标题", "原始作者或机构", "发布日期原值", "事件日期原值", "ETag", "Last-Modified", "内容哈希", "载荷指纹", "解析器版本", "失败原因", "运行批次", "数据源"],
-  rules: ["Rule ID", "版本", "标题", "规则类型", "状态", "规则说明", "配置 JSON", "校验和", "回滚目标版本"],
-  receipts: ["Scan ID", "扫描结果", "到期原因", "应扫描时间", "开始时间", "结束时间", "工作流版本", "错误与说明", "发现 URL 数", "新内容数", "标准化事件数", "入围数", "耗时毫秒", "执行通道", "响应指纹"],
-};
-
-const SCALAR_LARK_FIELDS: Record<ControlEntityKind, LarkFieldDefinition[]> = {
-  sources: [
-    { name: "Source ID", type: "text" }, { name: "名称", type: "text" }, { name: "状态", type: "select", options: options("启用", "停用") },
-    { name: "来源类型", type: "select", options: options("官网", "官方博客", "官方文档", "GitHub", "X", "论文", "监管与标准", "媒体", "其他") },
-    { name: "入口 URL", type: "text" }, { name: "采集方式", type: "select", options: options("Computer Use", "Codex Browser") }, { name: "采集域名", type: "text" },
-    { name: "来源层级", type: "select", options: options("一手来源", "二手来源", "发现线索") },
-    { name: "覆盖领域", type: "select", multiple: true, options: options(...DOMAIN_OPTIONS) }, { name: "扫描频率", type: "select", options: options("每日", "每周", "按需") }, { name: "优先级", type: "number" },
-    { name: "最后扫描", type: "datetime" }, { name: "最后成功", type: "datetime" }, { name: "最后有效更新", type: "datetime" },
-    { name: "下次扫描", type: "datetime" }, { name: "调度状态", type: "select", options: options("自动", "人工锁定") },
-  ],
-  runs: [
-    { name: "Run ID", type: "text" }, { name: "状态", type: "select", options: options("运行中", "部分成功", "成功", "失败", "健康空结果") },
-    { name: "当前阶段", type: "select", options: options("完成") },
-    { name: "发布状态", type: "select", options: options("已发布", "已扣留") }, { name: "触发类型", type: "select", options: options("定时", "重跑") },
-    { name: "工作流版本", type: "text" }, { name: "评分版本", type: "text" }, { name: "开始时间", type: "datetime" },
-    { name: "结束时间", type: "datetime" }, { name: "Obsidian 简报", type: "text" }, { name: "质量说明", type: "text" },
-    { name: "数据源数", type: "number" }, { name: "入围数", type: "number" }, { name: "到期来源数", type: "number" },
-    { name: "到期清单摘要", type: "text" }, { name: "日报摘要", type: "text" }, { name: "待复核摘要", type: "text" },
-  ],
-  items: [
-    { name: "Item ID", type: "text" }, { name: "标题", type: "text" }, { name: "当前状态", type: "select", options: options("已生成简报", "人工复核", "已淘汰") },
-    { name: "Canonical URL", type: "text" }, { name: "中文摘要", type: "text" }, { name: "为什么值得关注", type: "text" },
-    { name: "主领域", type: "select", options: options(...DOMAIN_OPTIONS) }, { name: "证据状态", type: "select", options: options("已确认", "部分确认", "待原始来源确认") }, { name: "总分", type: "number" },
-    { name: "评分版本", type: "text" },
-  ],
-  events: [
-    { name: "Event ID", type: "text" }, { name: "事件时间", type: "datetime" }, { name: "原状态", type: "select" },
-    { name: "新状态", type: "select" }, { name: "执行者", type: "select" }, { name: "迁移原因", type: "text" }, { name: "Rule ID 快照", type: "text" },
-    { name: "幂等键", type: "text" }, { name: "载荷指纹", type: "text" }, { name: "尝试次数", type: "number" }, { name: "错误码", type: "text" },
-  ],
-  feedback: [
-    { name: "Feedback ID", type: "text" }, { name: "反馈时间", type: "datetime" }, { name: "判断", type: "select" },
-    { name: "原因标签", type: "select" }, { name: "反馈说明", type: "text" }, { name: "价值评分", type: "number" },
-    { name: "整合目标", type: "text" },
-  ],
-  experiments: [
-    { name: "Experiment ID", type: "text" }, { name: "标题", type: "text" }, { name: "状态", type: "select" },
-    { name: "观察到的问题", type: "text" }, { name: "假设", type: "text" }, { name: "变更类型", type: "select" },
-    { name: "基线 Rule IDs", type: "text" }, { name: "候选 Rule IDs", type: "text" }, { name: "实验指标", type: "text" },
-    { name: "实验结论", type: "text" }, { name: "回滚条件", type: "text" }, { name: "审批结果", type: "select" },
-  ],
-  captures: [
-    { name: "Capture ID", type: "text" }, { name: "发现 URL", type: "text" }, { name: "最终 URL", type: "text" },
-    { name: "Canonical 候选 URL", type: "text" }, { name: "发现渠道", type: "select", options: options("官网巡检", "X", "GitHub", "论文索引", "监管与标准入口", "其他") }, { name: "发现时间", type: "datetime" },
-    { name: "抓取时间", type: "datetime" }, { name: "抓取状态", type: "select", options: options("成功", "失败", "访问受限", "等待重试", "隔离") },
-    { name: "提取状态", type: "select", options: options("成功", "失败", "未尝试", "无需提取") },
-    { name: "HTTP 状态码", type: "number" }, { name: "尝试次数", type: "number" }, { name: "内容类型", type: "text" },
-    { name: "语言", type: "text" }, { name: "原始标题", type: "text" }, { name: "原始作者或机构", type: "text" },
-    { name: "发布日期原值", type: "text" }, { name: "事件日期原值", type: "text" }, { name: "ETag", type: "text" },
-    { name: "Last-Modified", type: "text" }, { name: "短摘录", type: "text" }, { name: "内容哈希", type: "text" },
-    { name: "载荷指纹", type: "text" }, { name: "解析器版本", type: "text" }, { name: "失败原因", type: "text" },
-  ],
-  rules: [
-    { name: "Rule ID", type: "text" }, { name: "版本", type: "text" }, { name: "标题", type: "text" },
-    { name: "规则类型", type: "select" }, { name: "状态", type: "select", options: options("生效中") }, { name: "规则说明", type: "text" },
-    { name: "配置 JSON", type: "text" }, { name: "校验和", type: "text" }, { name: "回滚目标版本", type: "text" },
-  ],
-  receipts: [
-    { name: "Scan ID", type: "text" }, { name: "扫描结果", type: "select", options: options("有更新", "无更新", "失败", "跳过") },
-    { name: "到期原因", type: "select", options: options("每日到期", "每周到期", "首次基线", "覆盖缺口", "人工强制") },
-    { name: "应扫描时间", type: "datetime" }, { name: "开始时间", type: "datetime" }, { name: "结束时间", type: "datetime" },
-    { name: "工作流版本", type: "text" }, { name: "错误与说明", type: "text" }, { name: "发现 URL 数", type: "number" },
-    { name: "新内容数", type: "number" }, { name: "标准化事件数", type: "number" }, { name: "入围数", type: "number" },
-    { name: "耗时毫秒", type: "number" }, { name: "执行通道", type: "select", options: options("官网与文档", "GitHub", "论文与监管", "中国厂商", "X") }, { name: "响应指纹", type: "text" },
-  ],
-};
-
-const LINK_LARK_FIELDS: Partial<Record<ControlEntityKind, Array<{ name: string; target: ControlEntityKind }>>> = {
-  runs: [{ name: "到期来源", target: "sources" }, { name: "发现条目", target: "items" }, { name: "原始采集", target: "captures" }, { name: "状态事件", target: "events" },
-    { name: "扫描回执", target: "receipts" }, { name: "使用规则", target: "rules" }, { name: "人工反馈", target: "feedback" }],
-  items: [{ name: "发现批次", target: "runs" }, { name: "来源", target: "sources" }, { name: "原始采集", target: "captures" }, { name: "评分规则", target: "rules" }, { name: "状态事件", target: "events" }],
-  events: [{ name: "运行批次", target: "runs" }, { name: "情报条目", target: "items" }, { name: "规则记录", target: "rules" }, { name: "相关实验", target: "experiments" }],
-  feedback: [{ name: "情报条目", target: "items" }, { name: "运行批次", target: "runs" }, { name: "相关实验", target: "experiments" }],
-  experiments: [{ name: "基线规则", target: "rules" }, { name: "候选规则", target: "rules" }],
-  captures: [{ name: "运行批次", target: "runs" }, { name: "数据源", target: "sources" }, { name: "情报条目", target: "items" }],
-  receipts: [{ name: "运行批次", target: "runs" }, { name: "数据源", target: "sources" }, { name: "工作流规则", target: "rules" }],
-};
+/* Public compatibility export derived from the sole versioned field contract. */
+export const REQUIRED_LARK_FIELDS: Record<ControlEntityKind, string[]> = Object.fromEntries(
+  Object.entries(LARK_FIELD_MANIFEST).map(([kind, fields]) => [kind, fields.map((field) => field.name)]),
+) as Record<ControlEntityKind, string[]>;
+const SCALAR_LARK_FIELDS = LARK_SCALAR_FIELDS;
+const LINK_LARK_FIELDS = LARK_LINK_FIELDS;
 
 const LARK_BATCH_LIMIT = 200;
 
@@ -252,6 +167,21 @@ function jsonObject(value: unknown): Record<string, unknown> {
   try { const parsed = JSON.parse(value) as unknown; return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}; } catch { return {}; }
 }
 
+function jsonText(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "string") {
+    try { return canonicalJson(JSON.parse(value)); }
+    catch { return value; }
+  }
+  return canonicalJson(value);
+}
+
+function connectorConfigForControlPlane(source: SourceDefinition): Record<string, unknown> {
+  const config = { ...source.connector.config } as Record<string, unknown>;
+  if ("bearerToken" in config) config.bearerToken = "[secret-reference]";
+  return config;
+}
+
 function larkDate(value: unknown): string | undefined {
   const iso = isoDate(value); if (!iso) return undefined;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(iso));
@@ -331,6 +261,11 @@ function captureExtractStatus(value: unknown): string {
   return ({ success: "成功", failed: "失败", "not-attempted": "未尝试", isolated: "未尝试" } as Record<string, string>)[String(value)] ?? "成功";
 }
 
+function ruleType(value: unknown): string | undefined {
+  const token = String(value ?? "").split("-")[1];
+  return ({ WORKFLOW: "工作流", SCORE: "评分", SELECTION: "筛选规则", SOURCE: "数据源", IMPROVEMENT: "状态机", RETENTION: "存储与集成", REVIEW: "筛选规则" } as Record<string, string>)[token ?? ""];
+}
+
 const SOURCE_TYPE_TO_LARK: Record<NonNullable<SourceDefinition["sourceType"]>, string> = {
   website: "官网", "official-blog": "官方博客", "official-docs": "官方文档", github: "GitHub", x: "X",
   paper: "论文", regulation: "监管与标准", media: "媒体", other: "其他",
@@ -346,39 +281,76 @@ export function larkFields(record: CanonicalControlRecord, links: Partial<Record
     const source = p as unknown as SourceDefinition;
     const url = "url" in source.connector.config ? source.connector.config.url : source.connector.type === "github-releases" ? `https://github.com/${source.connector.config.repository}/releases`
       : source.connector.type === "x-api" || source.connector.type === "codex-browser" ? `https://x.com/${source.connector.config.username}` : undefined;
-    const captureMethod = source.connector.type === "computer-use" ? "Computer Use" : source.connector.type === "in-app-browser" || source.connector.type === "codex-browser" ? "Codex Browser" : "";
+    const captureMethod = ({ rss: "RSS", "github-releases": "GitHub Releases", webpage: "Webpage", "x-api": "X API", "computer-use": "Computer Use",
+      "in-app-browser": "Codex Browser", "codex-browser": "Codex Browser", extension: "Extension" } as Record<string, string>)[source.connector.type];
+    const connectorConfig = connectorConfigForControlPlane(source);
     return compact({ "Source ID": source.id, "名称": source.title, "状态": source.enabled === false ? "停用" : "启用",
       "来源类型": SOURCE_TYPE_TO_LARK[source.sourceType ?? "other"], "入口 URL": url, "采集方式": captureMethod,
       "采集域名": source.connector.type === "computer-use" || source.connector.type === "in-app-browser" ? (source.connector.config.allowedHosts ?? [new URL(source.connector.config.url).hostname]).join(", ") : "",
       "来源层级": source.evidenceTier === "primary" ? "一手来源" : source.evidenceTier === "clue" ? "发现线索" : "二手来源",
       "覆盖领域": source.coverageDomains ?? (source.domain ? [source.domain] : []), "扫描频率": source.scheduleState?.frequency === "weekly" ? "每周" : source.scheduleState?.frequency === "on-demand" ? "按需" : "每日",
       "优先级": source.priority, "调度状态": source.scheduleState?.humanLocked ? "人工锁定" : "自动", "最后扫描": larkDate(source.scheduleState?.lastScanAt), "最后成功": larkDate(source.scheduleState?.lastSuccessAt),
-      "最后有效更新": larkDate(source.scheduleState?.lastEffectiveUpdateAt), "下次扫描": larkDate(source.scheduleState?.nextScanAt) });
+      "最后有效更新": larkDate(source.scheduleState?.lastEffectiveUpdateAt), "下次扫描": larkDate(source.scheduleState?.nextScanAt),
+      "连接器类型": source.connector.type, "连接器版本": p.connector_version, "连接器配置（脱敏）": jsonText(connectorConfig), "配置摘要": digest(connectorConfig),
+      "最小扫描间隔小时": source.cadence?.minimumHours, "当前扫描间隔小时": source.cadence?.defaultHours, "最大扫描间隔小时": source.cadence?.maximumHours,
+      "游标摘要": p.cursor_digest, "最近失败时间": larkDate(p.last_failure_at), "最近错误码": p.last_error_code, "最近失败详情": p.last_failure_detail,
+      "最近响应指纹": p.last_response_fingerprint, "30天扫描数": p.scans_30d, "30天失败数": p.failures_30d, "30天更新数": p.updates_30d,
+      "30天入围数": p.selections_30d, "节奏调整建议": p.cadence_proposal, "节奏建议依据": p.cadence_reason });
   }
   if (record.kind === "runs") {
     const result = jsonObject(p.result_json); const plan = jsonObject(p.execution_plan_json); const provenance = jsonObject(plan.provenance);
     const rules = Array.isArray(plan.rules) ? plan.rules as Array<Record<string, unknown>> : [];
     const workflowVersion = rules.find((entry) => String(entry.id).startsWith("RULE-WORKFLOW-"))?.version;
     const scoreVersion = rules.find((entry) => String(entry.id).startsWith("RULE-SCORE-"))?.version;
-    const artifacts = jsonObject(result.artifactPaths); const integrity = jsonObject(result.integrityManifest);
-    return compact({ "Run ID": record.id, "状态": p.status === "success" ? "成功" : p.status === "partial" ? "部分成功" : p.status === "empty" ? "健康空结果" : p.status === "failed" ? "失败" : "运行中",
+    const artifacts = jsonObject(result.artifactPaths); const integrity = jsonObject(result.integrityManifest); const completion = jsonObject(result.completionReport);
+    const sync = jsonObject(result.controlPlaneSync); const commit = jsonObject(result.controlPlaneCommit); const document = jsonObject(result.documentManifest);
+    const daily = Array.isArray(result.daily) ? result.daily : []; const review = Array.isArray(result.review) ? result.review : []; const machineOnly = Array.isArray(result.machineOnly) ? result.machineOnly : [];
+    return compact({ "Run ID": record.id, "状态": p.status === "success" ? "成功" : p.status === "partial" ? "部分成功" : p.status === "empty" ? "健康空结果" : p.status === "failed" ? "失败" : p.status === "abandoned" ? "已遗弃" : "运行中",
       "发布状态": p.publication_state === "published" || result.publicationState === "published" ? "已发布" : "已扣留",
-      "当前阶段": p.current_stage === "complete" ? "完成" : p.current_stage, "触发类型": result.runKind === "formal-retry" ? "重跑" : "定时",
+      "当前阶段": p.current_stage === "complete" ? "完成" : p.current_stage === "abandoned" ? "已遗弃" : p.current_stage,
+      "触发类型": result.runKind === "formal-retry" ? "重跑" : p.trigger_type === "manual" ? "手动" : "定时", "运行类型": result.runKind, "运行模式": result.mode,
       "工作流版本": workflowVersion ?? provenance.coreVersion, "评分版本": scoreVersion ?? provenance.policyVersion,
-      "开始时间": larkDate(p.started_at ?? p.generated_at), "结束时间": larkDate(p.completed_at), "Obsidian 简报": artifacts.daily,
+      "开始时间": larkDate(p.started_at ?? p.generated_at), "结束时间": larkDate(p.completed_at), "Obsidian 简报": artifacts.daily, "Daily 路径": artifacts.daily, "Review 路径": artifacts.review,
       "质量说明": result.outcome ? `Briefwright ${String(result.outcome)}; config ${String(p.config_digest).slice(0, 12)}` : undefined,
-      "数据源数": record.links?.sources?.length ?? 0, "入围数": [...(Array.isArray(result.daily) ? result.daily : []), ...(Array.isArray(result.review) ? result.review : [])].length,
+      "数据源数": record.links?.sources?.length ?? 0, "入围数": daily.length + review.length,
       "到期来源数": Array.isArray(integrity.dueSourceIds) ? integrity.dueSourceIds.length : p.due_source_count,
       "到期清单摘要": integrity.dueManifestDigest ?? p.due_manifest_digest, "日报摘要": integrity.dailyArtifactDigest ?? p.daily_artifact_digest,
       "待复核摘要": integrity.reviewArtifactDigest ?? p.review_artifact_digest,
+      "配置摘要": p.config_digest ?? result.configDigest, "策略摘要": p.policy_digest ?? provenance.policyDigest, "提示词摘要": p.prompt_digest ?? provenance.promptDigest,
+      "来源清单摘要": p.source_digest ?? document.sourceManifestDigest, "协议合同摘要": document.contractDigest ?? provenance.protocolDigest,
+      "执行计划摘要": p.execution_plan_digest ?? (p.execution_plan_json ? digest(p.execution_plan_json) : undefined), "执行计划 JSON": jsonText(p.execution_plan_json),
+      "运行时版本": provenance.coreVersion ?? p.runtime_version, "运行时摘要": p.runtime_digest,
+      "进程存储已确认": sync.acknowledged ?? completion.processStoreValid, "远端读回 Revision": sync.readbackRevision, "远端读回摘要": sync.readbackDigest,
+      "发布提交已确认": commit.acknowledged ?? (result.publicationState === "published" || p.publication_state === "published"), "规则合同有效": completion.ruleContractValid, "文档存储有效": completion.documentStoreValid,
+      "完成报告 JSON": jsonText(result.completionReport), "更新来源数": completion.updated, "无变化来源数": completion.unchanged, "失败来源数": completion.failed,
+      "跳过来源数": completion.skipped, "缺失回执数": completion.missing, "缺失 Source IDs": Array.isArray(completion.missingSourceIds) ? completion.missingSourceIds.join(" | ") : undefined,
+      "Daily 条目数": completion.daily ?? daily.length, "Review 条目数": completion.review ?? review.length, "机器层条目数": machineOnly.length,
+      "模型失败数": Array.isArray(result.modelFailures) ? result.modelFailures.length : 0, "模型失败明细": jsonText(result.modelFailures),
+      "分析积压数": Array.isArray(result.analysisBacklog) ? result.analysisBacklog.reduce((sum, entry) => sum + Number(jsonObject(entry).count ?? 0), 0) : 0,
+      "分析积压明细": jsonText(result.analysisBacklog), "阶段耗时 JSON": jsonText(result.stageTimings), "产物阶段耗时 JSON": jsonText(result.artifactStageTimings),
+      "领域计数 JSON": jsonText(completion.domainCounts), "Top Item IDs": Array.isArray(completion.topItemIds) ? completion.topItemIds.join(" | ") : undefined,
+      "执行 Owner": p.execution_owner, "Lease 到期": larkDate(p.lease_expires_at), "最近心跳": larkDate(p.heartbeat_at), "Fencing Token": p.fencing_token,
+      "中止遗弃原因": p.abandon_reason ?? p.abort_reason, "父运行批次": linked("runs"),
       "发现条目": linked("items"), "原始采集": linked("captures"), "状态事件": linked("events"), "扫描回执": linked("receipts"), "使用规则": linked("rules"), "人工反馈": linked("feedback") });
   }
   if (record.kind === "items") {
-    const analysis = jsonObject(p.analysis_json);
+    const analysis = jsonObject(p.analysis_json); const evidenceJson = jsonObject(p.evidence_json); const attemptAnalysis = jsonObject(p.analysis_evidence_json); const scoreDimensions = jsonObject(analysis.scoreDimensions);
+    const verification = jsonObject(attemptAnalysis._evidenceVerification); const exclusions = Array.isArray(analysis.exclusionReasons) ? analysis.exclusionReasons.map(String) : [];
     const evidence = p.evidence_status === "confirmed-primary" ? "已确认" : p.evidence_status === "secondary-clue" ? "部分确认" : "待原始来源确认";
     return compact({ "Item ID": record.id, "标题": p.title, "当前状态": p.disposition === "daily" ? "已生成简报" : p.disposition === "review" ? "人工复核" : "已淘汰",
       "Canonical URL": analysis.url, "中文摘要": p.summary, "为什么值得关注": p.why_it_matters, "主领域": p.domain,
-      "证据状态": evidence, "总分": p.score, "评分版本": "1.0", "发现批次": linked("runs"), "来源": linked("sources"), "原始采集": linked("captures"), "评分规则": linked("rules"), "状态事件": linked("events") });
+      "证据状态": evidence, "总分": p.score, "评分版本": analysis.scoreVersion ?? "1.0", "处置结果": p.disposition,
+      "Canonical Identity": p.canonical_identity, "Capture Hash": analysis.captureHash ?? p.capture_hash, "抓取时间": larkDate(analysis.capturedAt ?? p.captured_at), "页面更新时间": larkDate(analysis.pageUpdatedAt ?? p.page_updated_at),
+      "主张 JSON": jsonText(analysis.claims ?? evidenceJson.claims), "主张证据 JSON": jsonText(verification.claimSupport ?? attemptAnalysis.claimEvidence ?? evidenceJson.claimSupport ?? analysis.claimEvidence),
+      "七维评分详情 JSON": jsonText(scoreDimensions), "各维度评分理由 JSON": jsonText(Object.fromEntries(Object.entries(scoreDimensions).map(([key, value]) => [key, jsonObject(value).reason]))),
+      "知识潜力 JSON": jsonText(analysis.knowledgePotential), "淘汰原因集合": Array.isArray(analysis.exclusionReasons) ? analysis.exclusionReasons.join(" | ") : p.exclusion_reason,
+      "Daily 排除原因集合": Array.isArray(analysis.dailyExclusionReasons) ? analysis.dailyExclusionReasons.join(" | ") : undefined,
+      "分析状态": p.analysis_status === "failed" ? "失败" : p.analysis_status === "pending" ? "待处理" : p.analysis_status === "skipped" ? "跳过" : "成功",
+      "模型 Provider": p.provider_id ?? analysis.provider, "模型名称": p.model_id ?? analysis.model, "Prompt 版本": p.prompt_version ?? analysis.promptVersion,
+      "分析时间": larkDate(p.analysis_attempted_at ?? analysis.analyzedAt), "分析耗时毫秒": p.analysis_duration_ms, "输入 Token": p.input_tokens, "输出 Token": p.output_tokens, "已知成本": p.cost_usd,
+      "条目快照摘要": digest(analysis), "新鲜度判定": analysis.freshnessStatus ?? (exclusions.includes("stale-source") ? "过期" : exclusions.includes("future-dated") ? "未来时间" : analysis.capturedAt ? "新鲜" : "未知"),
+      "日期语义": analysis.dateSemantics ?? (analysis.pageUpdatedAt ? "page-updated" : analysis.publishedAt ? "event" : "unknown"),
+      "发现批次": linked("runs"), "来源": linked("sources"), "原始采集": linked("captures"), "评分规则": linked("rules"), "状态事件": linked("events") });
   }
   if (record.kind === "captures") {
     const raw = jsonObject(p.raw_json);
@@ -392,13 +364,24 @@ export function larkFields(record: CanonicalControlRecord, links: Partial<Record
       "HTTP 状态码": value("httpStatus", "http_status"), "尝试次数": value("attempts", "attempts"), "内容类型": value("contentType", "content_type"),
       "语言": value("language", "language"), "原始作者或机构": value("author", "author"), "发布日期原值": value("publishedRaw", "published_raw"),
       "事件日期原值": value("eventDateRaw", "event_date_raw"), "ETag": value("etag", "etag"), "Last-Modified": value("lastModified", "last_modified"),
-      "解析器版本": value("parserVersion", "parser_version"), "失败原因": value("failureReason", "failure_reason"), "载荷指纹": p.content_hash,
+      "解析器版本": value("parserVersion", "parser_version"), "失败原因": value("failureReason", "failure_reason"), "载荷指纹": p.payload_fingerprint ?? p.content_hash,
+      "External Key": value("externalKey", "external_key"), "连接器类型": value("connectorType", "connector_type"), "连接器版本": value("connectorVersion", "connector_version"),
+      "标准化发布时间": larkDate(p.published_at), "页面更新时间": larkDate(value("pageUpdatedAt", "page_updated_at")), "页面更新时间原值": value("pageUpdatedRaw", "page_updated_raw"),
+      "证据类别": value("evidenceClass", "evidence_class"), "日期语义": value("dateSemantics", "date_semantics") ?? "unknown", "恢复自内容哈希": value("recoveryOfContentHash", "recovery_of_content_hash"),
+      "Capture Bundle ID": value("captureBundleId", "capture_bundle_id"), "Bundle 摘要": value("bundleDigest", "bundle_digest"), "Capture Manifest 摘要": value("captureManifestDigest", "capture_manifest_digest"),
+      "抓取耗时毫秒": value("durationMs", "duration_ms"), "外部请求 ID": value("requestId", "request_id"), "重定向链 JSON": jsonText(value("redirectChain", "redirect_chain_json")),
+      "内容长度": value("contentLength", "content_length"), "原始载荷摘要": value("rawPayloadDigest", "raw_payload_digest") ?? digest(raw), "原始载荷 Schema 版本": value("rawSchemaVersion", "raw_schema_version"),
+      "原始快照": value("rawSnapshot", "raw_snapshot"), "保留策略": value("retentionPolicy", "retention_policy"), "解析结果 JSON": jsonText(value("parserResult", "parser_result_json")),
       "运行批次": linked("runs"), "数据源": linked("sources"), "情报条目": linked("items") });
   }
-  if (record.kind === "receipts") return compact({ "Scan ID": record.id, "扫描结果": p.result === "updated" ? "有更新" : p.result === "unchanged" ? "无更新" : p.result === "failed" ? "失败" : "跳过",
+  if (record.kind === "receipts") return compact({ "Scan ID": record.id, "扫描结果": p.result === "updated" ? "有更新" : p.result === "observed" ? "已观察" : p.result === "unchanged" ? "无更新" : p.result === "failed" ? "失败" : "跳过",
     "到期原因": String(p.due_reason ?? "").startsWith("recovery-") ? "人工强制" : String(p.due_reason ?? "").includes("never") ? "首次基线" : "每日到期",
     "开始时间": larkDate(p.attempted_at), "结束时间": larkDate(p.completed_at), "错误与说明": p.detail,
     "发现 URL 数": p.capture_count, "耗时毫秒": p.duration_ms, "执行通道": receiptExecutionChannel(p.execution_channel), "工作流版本": record.links?.rules?.find((id) => id.startsWith("RULE-WORKFLOW-"))?.match(/-V(\d+\.\d+)$/)?.[1],
+    "尝试次数": p.attempts, "错误码": p.error_code, "连接器类型": p.connector_type, "连接器版本": p.connector_version, "游标前摘要": p.cursor_before_digest,
+    "游标后摘要": p.cursor_after_digest, "是否可重试": p.retryable, "下次重试时间": larkDate(p.next_retry_at), "外部请求 ID": p.request_id,
+    "到期清单摘要": p.due_manifest_digest, "请求载荷摘要": p.request_payload_digest, "结构化详情 JSON": jsonText(p.structured_detail ?? p.detail_json),
+    "来源有效更新时间": larkDate(p.source_effective_updated_at), "响应指纹": p.response_fingerprint, "HTTP 状态": p.http_status, "扫描频率": p.scan_frequency,
     "运行批次": linked("runs"), "数据源": linked("sources"), "工作流规则": linked("rules") });
   if (record.kind === "events") {
     const detail = jsonObject(p.payload_json);
@@ -406,25 +389,43 @@ export function larkFields(record: CanonicalControlRecord, links: Partial<Record
     "新状态": detail.toState ?? (p.stage === "complete" ? "已生成简报" : "已发现"), "执行者": detail.actor ?? "编排器",
     "迁移原因": detail.reason ?? p.event_type, "幂等键": p.idempotency_key, "载荷指纹": p.payload_fingerprint,
     "Rule ID 快照": detail.ruleIdSnapshot ?? record.links?.rules?.[0], "尝试次数": detail.attempts, "错误码": detail.errorCode ?? detail.detail,
+    "所属阶段": p.stage, "事件类型": p.event_type, "实体类型": p.entity_type, "实体 ID": p.entity_id, "完整载荷 JSON": jsonText(p.payload_json),
+    "运行内序号": p.sequence, "事件 Schema 版本": p.schema_version ?? "event-v1", "关联事件 ID": p.causation_event_id ?? p.correlation_event_id,
+    "持续时间毫秒": p.duration_ms ?? detail.durationMs, "严重级别": p.severity ?? (p.error_code || detail.errorCode ? "error" : "info"), "事件详情": jsonText(detail),
     "运行批次": linked("runs"), "情报条目": linked("items"), "规则记录": linked("rules"), "相关实验": linked("experiments") });
   }
   if (record.kind === "feedback") {
     const judgment = ({ include: "纳入", used: "纳入", "knowledge-worthy": "纳入", skip: "略过", ignored: "略过", review: "复核", reviewed: "复核",
       compare: "比较", "classification-correction": "纠正分类", "score-correction": "纠正评分", "source-correction": "纠正来源", "process-feedback": "流程反馈" } as Record<string, string>)[String(p.feedback_type)] ?? "复核";
     return compact({ "Feedback ID": record.id, "反馈时间": larkDate(p.created_at), "判断": judgment, "原因标签": p.feedback_type,
-      "反馈说明": p.note, "情报条目": linked("items"), "运行批次": linked("runs"), "相关实验": linked("experiments") });
+      "反馈说明": p.note, "反馈类型": p.feedback_type, "目标字段": p.target_field, "原值 JSON": jsonText(p.before_json ?? p.original_value), "建议值 JSON": jsonText(p.after_json ?? p.suggested_value),
+      "处理状态": ({ pending: "待处理", accepted: "已接受", rejected: "已拒绝", applied: "已应用" } as Record<string, string>)[String(p.processing_status)] ?? p.processing_status,
+      "处理时间": larkDate(p.processed_at), "处理人": p.processed_by ?? p.user_id, "处理结果决议": p.resolution, "幂等键": p.idempotency_key,
+      "载荷指纹": p.payload_fingerprint, "反馈来源渠道": p.channel ?? p.source_channel,
+      "价值评分": p.value_score, "整合目标": p.integration_target, "情报条目": linked("items"), "运行批次": linked("runs"), "相关实验": linked("experiments") });
   }
   if (record.kind === "experiments") {
     const baseline = jsonObject(p.baseline_policy_json); const candidate = jsonObject(p.candidate_policy_json);
     const baselineRules = Array.isArray(baseline.rules) ? (baseline.rules as Array<Record<string, unknown>>).map((item) => String(item.id)).sort() : [];
     const candidateRules = Array.isArray(candidate.rules) ? (candidate.rules as Array<Record<string, unknown>>).map((item) => String(item.id)).sort() : [];
-    const status = ({ candidate: "观察中", evaluated: "观察中", approved: "已采纳", active: "运行中", "rolled-back": "已回滚", rejected: "已拒绝" } as Record<string, string>)[String(p.status)] ?? p.status;
+    const status = ({ candidate: "候选", evaluated: "已评估", approved: "已批准", active: "运行中", "rolled-back": "已回滚", rejected: "已拒绝" } as Record<string, string>)[String(p.status)] ?? p.status;
+    const sample = jsonObject(p.sample_json); const metrics = jsonObject(p.metrics_json); const guardrails = jsonObject(metrics.guardrails);
     return compact({ "Experiment ID": record.id, "标题": `Briefwright experiment ${record.id}`, "状态": status,
       "假设": candidate.hypothesis, "基线 Rule IDs": baselineRules.join(" | "), "候选 Rule IDs": candidateRules.join(" | "),
-      "实验指标": p.metrics_json, "实验结论": p.status === "approved" ? "approved" : undefined,
+      "实验指标": p.metrics_json, "实验结论": metrics.recommendation ?? (p.status === "approved" ? "approved" : undefined),
+      "基线策略摘要": p.baseline_policy_digest ?? digest(baseline), "候选策略摘要": p.candidate_policy_digest ?? digest(candidate), "样本摘要": p.sample_digest ?? (p.sample_json ? digest(sample) : undefined),
+      "基线策略 JSON": jsonText(p.baseline_policy_json), "候选策略 JSON": jsonText(p.candidate_policy_json), "样本 JSON": jsonText(p.sample_json), "指标结果 JSON": jsonText(p.metrics_json),
+      "Guardrail 结果 JSON": jsonText(guardrails), "评审条目数": metrics.reviewedItems, "观察天数": metrics.spanDays, "14天门槛通过": Number(metrics.spanDays ?? 0) >= 14,
+      "50条评审门槛通过": Number(metrics.reviewedItems ?? 0) >= 50, "批准时间": larkDate(p.approved_at), "激活时间": larkDate(p.activated_at), "回滚时间": larkDate(p.rolled_back_at),
+      "决策理由": p.decision_reason ?? metrics.recommendation, "实验 Revision": p.revision,
       "基线规则": linked("rules"), "候选规则": linked("rules") });
   }
-  if (record.kind === "rules") return compact({ "Rule ID": p.id ?? record.id, "版本": p.version, "标题": p.title, "状态": "生效中" });
+  if (record.kind === "rules") return compact({ "Rule ID": p.id ?? record.id, "版本": p.version, "标题": p.title, "状态": p.status === "retired" ? "已退役" : p.status === "candidate" ? "候选" : "生效中",
+    "规则类型": p.rule_type ?? ruleType(p.id ?? record.id), "规则说明": p.description, "配置 JSON": jsonText(p.config_json ?? p.config), "校验和": p.checksum ?? digest(p), "回滚目标版本": p.rollback_target_version,
+    "Policy ID": p.policy_id, "Policy 版本": p.policy_version, "Policy 摘要": p.policy_digest, "规则来源": p.source ?? "packaged", "Rule Schema 版本": p.schema_version ?? "rule-v1",
+    "人工锁定": p.human_locked, "不可变 Revision": p.revision ?? digest(p), "Runtime 兼容范围": p.runtime_compatibility, "依赖 Rule IDs": Array.isArray(p.dependency_rule_ids) ? p.dependency_rule_ids.join(" | ") : p.dependency_rule_ids,
+    "依赖 Prompt Pack": p.prompt_pack, "Guardrail JSON": jsonText(p.guardrails), "退役原因": p.retirement_reason, "批准人": p.approved_by, "批准时间": larkDate(p.approved_at),
+    "生效条件": p.effective_condition, "阈值 JSON": jsonText(p.thresholds), "权重 JSON": jsonText(p.weights), "父规则替代规则": linked("rules"), "回滚目标规则": linked("rules") });
   return p;
 }
 
@@ -544,8 +545,8 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
           return missingOptions.length ? [`${expected.name}:missing-options=${missingOptions.join("|")}`] : [];
         });
         const problems = [...missing.map((field) => `${field}:missing`), ...invalidScalars, ...invalidLinks];
-        checks.push({ name: `lark-table:${kind}`, ok: problems.length === 0, detail: problems.length ? `invalid fields: ${problems.join(", ")}` : `${actual.size} fields; scalar and link mappings are present` });
-        const count = this.client.countRecords(this.config.tables[kind], REQUIRED_LARK_FIELDS[kind][0]!);
+        checks.push({ name: `lark-table:${kind}`, ok: problems.length === 0, detail: problems.length ? `invalid fields: ${problems.join(", ")}` : `${actual.size} fields; ${LARK_FIELD_MANIFEST_VERSION} scalar, option and link contract is present` });
+        const count = this.client.countRecords(this.config.tables[kind], LARK_ID_FIELDS[kind]);
         const limit = this.config.maximumRecordsPerTable ?? 2000;
         const remaining = limit - count;
         checks.push({ name: `lark-capacity:${kind}`, ok: remaining > 0,
@@ -596,7 +597,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     if (mode === "full") {
       const idByRecord: Partial<Record<ControlEntityKind, Map<string, string>>> = {};
       for (const kind of Object.keys(rowsByKind) as ControlEntityKind[]) idByRecord[kind] = new Map(rowsByKind[kind].flatMap((row) => {
-        const id = first(row.fields[REQUIRED_LARK_FIELDS[kind][0]!]); return id ? [[row.recordId, id] as const] : [];
+        const id = first(row.fields[LARK_ID_FIELDS[kind]]); return id ? [[row.recordId, id] as const] : [];
       }));
       const full: CanonicalControlRecord[] = [];
       for (const kind of Object.keys(rowsByKind) as ControlEntityKind[]) for (const row of rowsByKind[kind]) {
@@ -633,7 +634,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     }
     const knownTargets: Partial<Record<ControlEntityKind, Map<string, string>>> = {};
     for (const kind of [...new Set(records.map((record) => record.kind))]) {
-      const idField = REQUIRED_LARK_FIELDS[kind][0]!;
+      const idField = LARK_ID_FIELDS[kind];
       const recordsForKind = records.filter((record) => record.kind === kind);
       const existing = new Map(this.client.recordsMatchingAny(this.config.tables[kind], idField, recordsForKind.map((record) => record.id), REQUIRED_LARK_FIELDS[kind]).map((row) => [first(row.fields[idField]), row]));
       knownTargets[kind] = new Map([...existing.entries()].flatMap(([id, row]) => id ? [[id, row.recordId] as const] : []));
@@ -649,7 +650,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     }
     const referencedKinds = [...new Set(records.flatMap((record) => Object.entries(record.links ?? {}).flatMap(([kind, ids]) => ids?.length ? [kind as ControlEntityKind] : [])))];
     for (const kind of referencedKinds) {
-      const idField = REQUIRED_LARK_FIELDS[kind][0]!;
+      const idField = LARK_ID_FIELDS[kind];
       const targets = knownTargets[kind] ?? new Map<string, string>();
       const requiredIds = [...new Set(records.flatMap((record) => record.links?.[kind] ?? []))];
       const missingIds = requiredIds.filter((id) => !targets.has(id));
@@ -767,14 +768,14 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
       const records = [...completed.values()].filter((record) => record.kind === kind && !failed.some((item) => item.kind === record.kind && item.id === record.id));
       if (!records.length) continue;
       const expectedById = new Map(records.map((record) => [record.id, comparisonFields(record, larkFields(record, index))]));
-      const fields = [...new Set([REQUIRED_LARK_FIELDS[kind][0]!, ...records.flatMap((record) => Object.keys(expectedById.get(record.id)!))])];
+      const fields = [...new Set([LARK_ID_FIELDS[kind], ...records.flatMap((record) => Object.keys(expectedById.get(record.id)!))])];
       let pending = records;
       let lastError: unknown;
       for (let attempt = 0; attempt < 5 && pending.length; attempt += 1) {
         if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 250));
         try {
           const actualById = new Map(this.client.recordsByIds(this.config.tables[kind], records.map((record) => record.storeRecordId!).filter(Boolean), fields).flatMap((row) => {
-            const id = first(row.fields[REQUIRED_LARK_FIELDS[kind][0]!]);
+            const id = first(row.fields[LARK_ID_FIELDS[kind]]);
             return id ? [[id, row] as const] : [];
           }));
           const next: typeof pending = [];

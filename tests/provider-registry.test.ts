@@ -8,6 +8,8 @@ import { initializeProject } from "../src/commands/init.js";
 import { loadEffectiveConfig } from "../src/config/load.js";
 import { OpenAICompatibleProvider } from "../src/providers/openai-compatible.js";
 import { AnthropicMessagesProvider } from "../src/providers/anthropic.js";
+import { FixtureModelProvider } from "../src/providers/fixture.js";
+import { providerFor } from "../src/providers/registry.js";
 import type { CaptureEnvelope } from "../src/connectors/types.js";
 
 const capture: CaptureEnvelope = { sourceId: "SRC-TEST", externalKey: "1", canonicalUrl: "https://example.com/1", title: "Runtime update",
@@ -21,6 +23,14 @@ async function providerContext(model: string, secretName: string, secretValue: s
 }
 
 describe("generic provider protocols", () => {
+  it("loads the advertised fixture provider through the same configuration and registry path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-fixture-provider-"));
+    const configPath = await initializeProject({ directory: root, yes: true, model: "fixture" });
+    const config = await loadEffectiveConfig(configPath);
+    expect(config.provider).toMatchObject({ id: "fixture", protocol: "fixture" });
+    expect(providerFor(config.provider)).toBeInstanceOf(FixtureModelProvider);
+  });
+
   it.each([[
     "openai", "OPENAI_API_KEY", "openai-test", "https://api.openai.com/v1/chat/completions",
   ], ["gemini", "GEMINI_API_KEY", "gemini-test", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"],

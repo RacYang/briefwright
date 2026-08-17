@@ -4,9 +4,26 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { systemLarkRunner } from "../src/control-plane/lark-cli.js";
+import { LarkCliClient, systemLarkRunner, type LarkRunner } from "../src/control-plane/lark-cli.js";
 
 describe("system lark-cli runner", () => {
+  it("chunks reads wider than the 50-field Base API limit and merges by record ID", () => {
+    const calls: string[][] = [];
+    const runner: LarkRunner = (args) => {
+      calls.push(args);
+      const fields = args.flatMap((value, index) => value === "--field-id" ? [args[index + 1]!] : []);
+      expect(fields.length).toBeLessThanOrEqual(50);
+      return { record_id_list: ["rec_1"], fields, data: [fields.map((field) => `value:${field}`)], has_more: false };
+    };
+    const fields = Array.from({ length: 117 }, (_value, index) => `Field ${index}`);
+    const client = new LarkCliClient("base", "user", runner);
+    expect(client.records("table", fields)).toEqual([{ recordId: "rec_1", fields: Object.fromEntries(fields.map((field) => [field, `value:${field}`])) }]);
+    expect(client.recordsMatchingAny("table", "Run ID", ["RUN-1"], fields)).toEqual([]);
+    expect(client.recordsByIds("table", ["rec_1"], fields)[0]?.fields).toHaveProperty("Field 116", "value:Field 116");
+    expect(calls.filter((args) => args.includes("+record-list"))).toHaveLength(6);
+    expect(calls.filter((args) => args.includes("+record-get"))).toHaveLength(3);
+  });
+
   it("kills a non-terminating subprocess at the configured deadline", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-lark-timeout-"));
     const executable = path.join(root, "lark-cli.mjs");

@@ -70,12 +70,32 @@ export interface LarkFieldOption {
 }
 export interface LarkFieldDefinition {
   name: string;
-  type: "text" | "number" | "datetime" | "select" | "link";
+  type: "text" | "number" | "datetime" | "select" | "link" | "checkbox";
   multiple?: boolean;
   options?: LarkFieldOption[];
   link_table?: string;
   bidirectional?: boolean;
   bidirectional_link_field_name?: string;
+}
+
+const LARK_READ_FIELD_LIMIT = 50;
+
+function fieldBatches(fields: string[], required: string[] = []): string[][] {
+  const prefix = [...new Set(required)];
+  if (prefix.length > LARK_READ_FIELD_LIMIT) throw new Error("required Lark read fields exceed the API limit");
+  const remaining = [...new Set(fields)].filter((field) => !prefix.includes(field));
+  const width = LARK_READ_FIELD_LIMIT - prefix.length;
+  if (!remaining.length) return [prefix];
+  return Array.from({ length: Math.ceil(remaining.length / width) }, (_value, index) => [...prefix, ...remaining.slice(index * width, (index + 1) * width)]);
+}
+
+function mergePage(rows: Map<string, { recordId: string; fields: Record<string, unknown> }>, page: LarkRecordPage): void {
+  for (let row = 0; row < page.record_id_list.length; row += 1) {
+    const recordId = page.record_id_list[row]!;
+    const current = rows.get(recordId) ?? { recordId, fields: {} };
+    page.fields.forEach((field, column) => { current.fields[field] = page.data[row]?.[column]; });
+    rows.set(recordId, current);
+  }
 }
 
 function assertNoIgnoredFields(operation: string, response: unknown): void {
@@ -129,19 +149,18 @@ export class LarkCliClient {
   }
 
   records(tableId: string, fields: string[]): Array<{ recordId: string; fields: Record<string, unknown> }> {
-    const rows: Array<{ recordId: string; fields: Record<string, unknown> }> = [];
-    for (let offset = 0; ; offset += 200) {
-      const args = ["base", "+record-list", "--base-token", this.baseToken, "--table-id", tableId];
-      for (const field of fields) args.push("--field-id", field);
-      args.push("--offset", String(offset), "--limit", "200", "--json", "--as", this.identity);
-      const page = this.runner(args) as LarkRecordPage;
-      for (let row = 0; row < page.record_id_list.length; row += 1) {
-        const values: Record<string, unknown> = {};
-        page.fields.forEach((field, column) => { values[field] = page.data[row]?.[column]; });
-        rows.push({ recordId: page.record_id_list[row]!, fields: values });
+    const rows = new Map<string, { recordId: string; fields: Record<string, unknown> }>();
+    for (const requestedFields of fieldBatches(fields)) {
+      for (let offset = 0; ; offset += 200) {
+        const args = ["base", "+record-list", "--base-token", this.baseToken, "--table-id", tableId];
+        for (const field of requestedFields) args.push("--field-id", field);
+        args.push("--offset", String(offset), "--limit", "200", "--json", "--as", this.identity);
+        const page = this.runner(args) as LarkRecordPage;
+        mergePage(rows, page);
+        if (!page.has_more) break;
       }
-      if (!page.has_more) return rows;
     }
+    return [...rows.values()];
   }
 
   recordsMatchingAny(tableId: string, idField: string, values: string[], fields: string[]): Array<{ recordId: string; fields: Record<string, unknown> }> {
@@ -150,18 +169,15 @@ export class LarkCliClient {
     for (let start = 0; start < values.length; start += 40) {
       const batch = values.slice(start, start + 40);
       const filter = JSON.stringify({ logic: "or", conditions: batch.map((value) => [idField, "==", value]) });
-      for (let offset = 0; ; offset += 200) {
-        const args = ["base", "+record-list", "--base-token", this.baseToken, "--table-id", tableId];
-        for (const field of [...new Set([idField, ...fields])]) args.push("--field-id", field);
-        args.push("--filter-json", filter, "--offset", String(offset), "--limit", "200", "--json", "--as", this.identity);
-        const page = this.runner(args) as LarkRecordPage;
-        for (let row = 0; row < page.record_id_list.length; row += 1) {
-          const projected: Record<string, unknown> = {};
-          page.fields.forEach((field, column) => { projected[field] = page.data[row]?.[column]; });
-          const recordId = page.record_id_list[row]!;
-          rows.set(recordId, { recordId, fields: projected });
+      for (const requestedFields of fieldBatches(fields, [idField])) {
+        for (let offset = 0; ; offset += 200) {
+          const args = ["base", "+record-list", "--base-token", this.baseToken, "--table-id", tableId];
+          for (const field of requestedFields) args.push("--field-id", field);
+          args.push("--filter-json", filter, "--offset", String(offset), "--limit", "200", "--json", "--as", this.identity);
+          const page = this.runner(args) as LarkRecordPage;
+          mergePage(rows, page);
+          if (!page.has_more) break;
         }
-        if (!page.has_more) break;
       }
     }
     const expected = new Set(values);
@@ -171,21 +187,18 @@ export class LarkCliClient {
   recordsByIds(tableId: string, recordIds: string[], fields: string[]): Array<{ recordId: string; fields: Record<string, unknown> }> {
     if (!recordIds.length) return [];
     try {
-      const rows: Array<{ recordId: string; fields: Record<string, unknown> }> = [];
+      const rows = new Map<string, { recordId: string; fields: Record<string, unknown> }>();
       for (let start = 0; start < recordIds.length; start += 100) {
         const batch = recordIds.slice(start, start + 100);
-        const args = ["base", "+record-get", "--base-token", this.baseToken, "--table-id", tableId];
-        for (const recordId of batch) args.push("--record-id", recordId);
-        for (const field of fields) args.push("--field-id", field);
-        args.push("--format", "json", "--as", this.identity);
-        const page = this.runner(args) as LarkRecordPage;
-        for (let row = 0; row < page.record_id_list.length; row += 1) {
-          const projected: Record<string, unknown> = {};
-          page.fields.forEach((field, column) => { projected[field] = page.data[row]?.[column]; });
-          rows.push({ recordId: page.record_id_list[row]!, fields: projected });
+        for (const requestedFields of fieldBatches(fields)) {
+          const args = ["base", "+record-get", "--base-token", this.baseToken, "--table-id", tableId];
+          for (const recordId of batch) args.push("--record-id", recordId);
+          for (const field of requestedFields) args.push("--field-id", field);
+          args.push("--format", "json", "--as", this.identity);
+          mergePage(rows, this.runner(args) as LarkRecordPage);
         }
       }
-      return rows;
+      return [...rows.values()];
     } catch {
       const expected = new Set(recordIds);
       return this.records(tableId, fields).filter((row) => expected.has(row.recordId));

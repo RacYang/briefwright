@@ -27,6 +27,12 @@ function analysis(value: number, knowledge = true): ModelAnalysis {
 }
 
 describe("deterministic selection policy", () => {
+  it("reapplies the publication retention boundary to historical or custom capture summaries", () => {
+    const longSummary = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
+    const candidate = buildCandidate(config, { ...capture(0), summary: longSummary }, analysis(5));
+    expect(candidate.sourceExcerpt?.split(" ")).toHaveLength(25);
+  });
+
   it("enforces Daily and Review thresholds plus the knowledge gate", () => {
     expect(buildCandidate(config, capture(1), analysis(3.5))).toMatchObject({ title: "Agent mechanism adds an evidence checkpoint", score: 70, disposition: "daily" });
     expect(buildCandidate(config, capture(2), analysis(3))).toMatchObject({ score: 60, disposition: "review" });

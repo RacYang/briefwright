@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { EffectiveConfig, PolicyDefinition } from "../config/types.js";
+import { retainExcerpt } from "../connectors/retention.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
 import type { DurableModelAnalysis, ModelAnalysis } from "../providers/types.js";
 import type { BriefingItem } from "./types.js";
@@ -64,7 +65,7 @@ export function buildCandidate(config: EffectiveConfig, capture: CaptureEnvelope
     capturedAt: capture.capturedAt,
     ...(capture.publishedAt ? { publishedAt: capture.publishedAt } : {}),
     ...(capture.pageUpdatedAt ? { pageUpdatedAt: capture.pageUpdatedAt } : {}),
-    sourceExcerpt: capture.summary,
+    sourceExcerpt: retainExcerpt(capture.summary, config.policy.retention.quoteWordLimit),
     title: analysis.title.trim() || capture.title,
     summary: analysis.summary,
     whyItMatters: analysis.whyItMatters,

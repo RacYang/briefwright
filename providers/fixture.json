@@ -1,0 +1,10 @@
+{
+  "id": "fixture",
+  "version": "1.0.0",
+  "protocol": "fixture",
+  "model": "deterministic-fixture",
+  "baseUrl": "https://fixture.local",
+  "timeoutSeconds": 30,
+  "retries": 0,
+  "endpointPolicy": { "allowedHosts": ["fixture.local"] }
+}

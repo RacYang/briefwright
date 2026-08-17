@@ -325,7 +325,11 @@ export async function runFormalProject(configPath: string, options: {
     ...(isRecovery ? { parentRunId: recovery!.parentRunId } : {}),
     ...(reverification ? { evidenceReverification: true, evidenceReverificationTargetCount: state.evidenceReverificationTargets(baseRunId).length } : {}),
   };
-  const resumableWithheld = options.retryFailed && retry?.resumed === true && state.runRecord(runId)?.status === "failed";
+  const recoveryRecord = state.runRecord(runId);
+  const resumableWithheld = options.retryFailed && retry?.resumed === true
+    && recoveryRecord?.status === "failed"
+    && recoveryRecord.result?.publicationState === "withheld"
+    && recoveryRecord.result.completionReport?.processStoreValid === false;
   const begin = resumableWithheld
     ? state.resumeWithheldControlPlaneRun(runId, startedAt)
     : state.beginFormalRun(config, runId, startedAt, executionPlan, isRecovery ? recovery!.parentRunId : undefined);
@@ -750,7 +754,7 @@ export async function runFormalProject(configPath: string, options: {
       processStoreValid: true,
     });
     const result: RunResult = {
-      runId, generatedAt: startedAt, mode: "live", runKind: isRecovery ? "formal-retry" : "formal", configDigest: configDigest(config), receipts,
+      runId, generatedAt: recorded?.generatedAt ?? startedAt, mode: "live", runKind: isRecovery ? "formal-retry" : "formal", configDigest: configDigest(config), receipts,
       dueSourceIds: state.dueSourceIds(runId),
       daily: selected.daily, review: selected.review, machineOnly: selected.machineOnly, ruleIds: config.policy.rules.map((rule) => rule.id), modelFailures,
       analysisBacklog: deferredAnalysis,

@@ -10,6 +10,7 @@ import type { FormalRunOutcome } from "../core/accounting.js";
 import type { BriefingItem, Receipt } from "../core/types.js";
 import type { CaptureEnvelope } from "../connectors/types.js";
 import { normalizeExternalKey, normalizeScalarText } from "../connectors/scalars.js";
+import { connectorFor } from "../connectors/registry.js";
 import type { CanonicalControlRecord } from "../control-plane/types.js";
 import { countReceipts, runOutcome } from "../core/accounting.js";
 import { canonicalEventIdentity, replayCandidateUnderPolicy, selectCandidatesUnderPolicy } from "../core/selection.js";
@@ -43,10 +44,10 @@ export class SqliteStateStore {
     if (existing) throw new Error(`Run ${result.runId} is already finalized and cannot be changed`);
   }
 
-  runRecord(runId: string): { status: string; configDigest: string; result: RunResult | null } | null {
-    const row = this.database.prepare("SELECT status, config_digest, result_json FROM runs WHERE run_id=?").get(runId) as
-      { status: string; config_digest: string; result_json: string | null } | undefined;
-    return row ? { status: row.status, configDigest: row.config_digest, result: row.result_json ? JSON.parse(row.result_json) as RunResult : null } : null;
+  runRecord(runId: string): { status: string; generatedAt: string; configDigest: string; result: RunResult | null } | null {
+    const row = this.database.prepare("SELECT status, generated_at, config_digest, result_json FROM runs WHERE run_id=?").get(runId) as
+      { status: string; generated_at: string; config_digest: string; result_json: string | null } | undefined;
+    return row ? { status: row.status, generatedAt: row.generated_at, configDigest: row.config_digest, result: row.result_json ? JSON.parse(row.result_json) as RunResult : null } : null;
   }
 
   runArtifacts(runId: string): Array<{ kind: string; path: string; contentHash: string }> {
@@ -415,7 +416,11 @@ export class SqliteStateStore {
     const record = (kind: CanonicalControlRecord["kind"], id: string, payload: Record<string, unknown>, links?: CanonicalControlRecord["links"]): CanonicalControlRecord =>
       ({ kind, id, payload, ...(links && Object.keys(links).length ? { links } : {}) });
     const runRows = rows<Record<string, unknown>>("SELECT * FROM runs WHERE run_id=?", runId);
-    const receiptRows = rows<Record<string, unknown>>(`SELECT r.*,d.reason due_reason FROM receipts r LEFT JOIN due_sources d ON d.run_id=r.run_id AND d.source_id=r.source_id WHERE r.run_id=? ORDER BY r.source_id`, runId);
+    let runResult: RunResult | undefined;
+    if (typeof runRows[0]?.result_json === "string") {
+      try { runResult = JSON.parse(runRows[0].result_json) as RunResult; } catch { /* incomplete runs have no reusable result */ }
+    }
+    const receiptRows = rows<Record<string, unknown>>(`SELECT r.*,d.reason due_reason,d.source_snapshot_json FROM receipts r LEFT JOIN due_sources d ON d.run_id=r.run_id AND d.source_id=r.source_id WHERE r.run_id=? ORDER BY r.source_id`, runId);
     const resultItemIds = new Set<string>();
     const selectedItemIds = new Set<string>();
     for (const run of runRows) {
@@ -459,26 +464,52 @@ export class SqliteStateStore {
     const scoreRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-SCORE-")).map((rule) => rule.id);
     const sourceCursorRows = new Map(rows<Record<string, unknown>>("SELECT * FROM source_cursors").map((row) => [String(row.source_id), row]));
     const sourceSettingRows = new Map(rows<Record<string, unknown>>("SELECT * FROM source_settings").map((row) => [String(row.source_id), row]));
+    const metricsSince = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const sourceMetricRows = new Map(rows<Record<string, unknown>>(`SELECT source_id,COUNT(*) scans_30d,
+      SUM(CASE WHEN result='failed' THEN 1 ELSE 0 END) failures_30d,
+      SUM(CASE WHEN result='updated' THEN 1 ELSE 0 END) updates_30d
+      FROM receipts WHERE COALESCE(attempted_at,'')>=? GROUP BY source_id`, metricsSince).map((row) => [String(row.source_id), row]));
+    const sourceSelectionRows = new Map(rows<Record<string, unknown>>(`SELECT c.source_id,COUNT(*) selections_30d FROM items i
+      JOIN captures c ON c.capture_id=i.capture_id JOIN runs r ON r.run_id=i.run_id
+      WHERE r.generated_at>=? AND i.disposition IN ('daily','review') GROUP BY c.source_id`, metricsSince).map((row) => [String(row.source_id), row]));
+    const latestFailureRows = new Map<string, Record<string, unknown>>();
+    for (const row of rows<Record<string, unknown>>(`SELECT source_id,attempted_at,error_code,detail FROM receipts WHERE result='failed' ORDER BY attempted_at DESC`)) {
+      if (!latestFailureRows.has(String(row.source_id))) latestFailureRows.set(String(row.source_id), row);
+    }
+    const latestCadenceProposalRows = new Map<string, Record<string, unknown>>();
+    for (const row of rows<Record<string, unknown>>("SELECT source_id,proposed_hours,reason,status FROM cadence_proposals ORDER BY created_at DESC")) {
+      if (!latestCadenceProposalRows.has(String(row.source_id))) latestCadenceProposalRows.set(String(row.source_id), row);
+    }
+    const analysisAttemptRows = new Map(rows<Record<string, unknown>>("SELECT * FROM analysis_attempts WHERE run_id=?", runId).map((row) => [String(row.capture_id), row]));
     const publishedRunIds = new Set(rows<{ run_id: string }>(`SELECT runs.run_id FROM runs
       WHERE runs.status IN ('success','partial','empty')
         AND (SELECT COUNT(*) FROM output_artifacts WHERE output_artifacts.run_id=runs.run_id
           AND output_artifacts.kind IN ('daily-markdown','review-markdown'))=2`).map((row) => row.run_id));
     const sourcePayload = (source: EffectiveConfig["preset"]["sources"][number]): Record<string, unknown> => {
-      const cursor = sourceCursorRows.get(source.id); const setting = sourceSettingRows.get(source.id);
-      if (!cursor && !setting) return source as unknown as Record<string, unknown>;
+      const cursor = sourceCursorRows.get(source.id); const setting = sourceSettingRows.get(source.id); const metrics = sourceMetricRows.get(source.id);
+      const selections = sourceSelectionRows.get(source.id); const failure = latestFailureRows.get(source.id); const cadenceProposal = latestCadenceProposalRows.get(source.id);
       const lastScanAt = typeof cursor?.last_scan_at === "string" ? cursor.last_scan_at : source.scheduleState?.lastScanAt;
       const lastSuccessAt = typeof cursor?.last_success_at === "string" ? cursor.last_success_at : source.scheduleState?.lastSuccessAt;
       const lastEffectiveUpdateAt = typeof cursor?.last_effective_update_at === "string" ? cursor.last_effective_update_at : source.scheduleState?.lastEffectiveUpdateAt;
       const cadenceHours = typeof setting?.cadence_hours === "number" ? setting.cadence_hours : source.cadence?.defaultHours ?? 24;
       const nextScanAt = lastScanAt ? new Date(new Date(lastScanAt).getTime() + cadenceHours * 3_600_000).toISOString() : source.scheduleState?.nextScanAt;
       const frequency = cadenceHours <= 24 ? "daily" : cadenceHours <= 168 ? "weekly" : "on-demand";
-      return { ...source, cadence: { ...(source.cadence ?? { minimumHours: 6, maximumHours: 2160 }), defaultHours: cadenceHours }, scheduleState: { ...(source.scheduleState ?? {}), frequency,
-        ...(typeof setting?.human_locked === "number" ? { humanLocked: setting.human_locked === 1 } : {}), ...(lastScanAt ? { lastScanAt } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}), ...(lastEffectiveUpdateAt ? { lastEffectiveUpdateAt } : {}), ...(nextScanAt ? { nextScanAt } : {}) } } as unknown as Record<string, unknown>;
+      return { ...source, connector_version: connectorFor(source).descriptor.version,
+        cadence: { ...(source.cadence ?? { minimumHours: 6, maximumHours: 2160 }), defaultHours: cadenceHours }, scheduleState: { ...(source.scheduleState ?? {}), frequency,
+        ...(typeof setting?.human_locked === "number" ? { humanLocked: setting.human_locked === 1 } : {}), ...(lastScanAt ? { lastScanAt } : {}), ...(lastSuccessAt ? { lastSuccessAt } : {}), ...(lastEffectiveUpdateAt ? { lastEffectiveUpdateAt } : {}), ...(nextScanAt ? { nextScanAt } : {}) },
+        ...(typeof cursor?.cursor_json === "string" ? { cursor_digest: hashJson(JSON.parse(cursor.cursor_json)) } : {}),
+        ...(failure ? { last_failure_at: failure.attempted_at, last_error_code: failure.error_code, last_failure_detail: failure.detail } : {}),
+        scans_30d: metrics?.scans_30d ?? 0, failures_30d: metrics?.failures_30d ?? 0, updates_30d: metrics?.updates_30d ?? 0, selections_30d: selections?.selections_30d ?? 0,
+        ...(cadenceProposal ? { cadence_proposal: `${String(cadenceProposal.status)}: ${String(cadenceProposal.proposed_hours)}h`, cadence_reason: cadenceProposal.reason } : {}) } as unknown as Record<string, unknown>;
     };
     return [
       ...config.preset.sources.map((source) => record("sources", source.id, sourcePayload(source))),
-      ...config.policy.rules.map((rule) => record("rules", rule.id, rule as unknown as Record<string, unknown>)),
+      ...config.policy.rules.map((rule) => record("rules", rule.id, { ...rule, policy_id: config.policy.id, policy_version: config.policy.version,
+        policy_digest: hashJson(config.policy), source: config.provenance.policyOrigin === "approved-experiment" ? "experiment" : "packaged", schema_version: "rule-v1",
+        runtime_compatibility: `briefwright@${config.provenance.coreVersion}`, prompt_pack: `${config.prompts.id}@${config.prompts.version}`,
+        thresholds: config.policy.score, weights: config.policy.score.dimensions } as unknown as Record<string, unknown>)),
       ...runRows.map((row) => record("runs", String(row.run_id), row, {
+        ...(row.parent_run_id ? { runs: [String(row.parent_run_id)] } : {}),
         sources: this.dueSourceIds(runId), rules: config.policy.rules.map((rule) => rule.id),
         captures: captureRows.map((capture) => String(capture.capture_id)), items: itemRows.map((item) => String(item.item_id)),
         events: controlEventRows.map((event) => String(event.event_id)), receipts: receiptRows.map((receipt) => `${runId}:${String(receipt.source_id)}`), feedback: feedbackRows.map((feedback) => String(feedback.feedback_id)),
@@ -486,11 +517,17 @@ export class SqliteStateStore {
       ...captureRows.map((row) => {
         const originRunId = String(row.run_id);
         const runLinks = [...new Set([runId, ...(originRunId !== runId && publishedRunIds.has(originRunId) ? [originRunId] : [])])];
-        return record("captures", String(row.capture_id), row, { runs: runLinks, sources: [String(row.source_id)], items: itemRows.filter((item) => item.capture_id === row.capture_id).map((item) => String(item.item_id)) });
+        const source = config.preset.sources.find((entry) => entry.id === row.source_id);
+        return record("captures", String(row.capture_id), { ...row, connector_type: source?.connector.type, connector_version: source ? connectorFor(source).descriptor.version : undefined }, { runs: runLinks, sources: [String(row.source_id)], items: itemRows.filter((item) => item.capture_id === row.capture_id).map((item) => String(item.item_id)) });
       }),
-      ...itemRows.map((row) => record("items", String(row.item_id), row, { runs: [...new Set([String(row.run_id), runId])], captures: [String(row.capture_id)], sources: captureRows.filter((capture) => capture.capture_id === row.capture_id).map((capture) => String(capture.source_id)), rules: scoreRuleIds,
-        events: controlEventRows.filter((event) => event.entity_type === "item" && event.entity_id === row.item_id).map((event) => String(event.event_id)) })),
-      ...controlEventRows.map((row) => record("events", String(row.event_id), row, { runs: [runId], rules: workflowRuleIds,
+      ...itemRows.map((row) => {
+        const attempt = analysisAttemptRows.get(String(row.capture_id));
+        return record("items", String(row.item_id), { ...row, ...(attempt ? { analysis_status: attempt.status, analysis_attempted_at: attempt.attempted_at,
+          analysis_duration_ms: attempt.duration_ms, input_tokens: attempt.input_tokens, output_tokens: attempt.output_tokens, cost_usd: attempt.cost_usd,
+          analysis_evidence_json: attempt.analysis_json } : {}), provider_id: config.provider.id, model_id: config.provider.model, prompt_version: config.prompts.version }, { runs: [...new Set([String(row.run_id), runId])], captures: [String(row.capture_id)], sources: captureRows.filter((capture) => capture.capture_id === row.capture_id).map((capture) => String(capture.source_id)), rules: scoreRuleIds,
+          events: controlEventRows.filter((event) => event.entity_type === "item" && event.entity_id === row.item_id).map((event) => String(event.event_id)) });
+      }),
+      ...controlEventRows.map((row, index) => record("events", String(row.event_id), { ...row, sequence: index + 1 }, { runs: [runId], rules: workflowRuleIds,
         ...(row.entity_type === "item" && row.entity_id ? { items: [String(row.entity_id)] } : {}) })),
       ...feedbackRows.map((row) => record("feedback", String(row.feedback_id), row, { items: [String(row.item_id)], runs: [runId] })),
       ...experimentRows.map((row) => record("experiments", String(row.experiment_id), row, { rules: config.policy.rules.map((rule) => rule.id) })),
@@ -498,7 +535,12 @@ export class SqliteStateStore {
         const source = config.preset.sources.find((entry) => entry.id === row.source_id);
         const executionChannel = source?.connector.type === "github-releases" ? "GitHub" : source?.connector.type === "x-api" || source?.connector.type === "codex-browser" ? "X"
           : source?.sourceType === "paper" || source?.sourceType === "regulation" ? "论文与监管" : "官网与文档";
-        return record("receipts", `${runId}:${String(row.source_id)}`, { ...row, execution_channel: executionChannel }, { runs: [runId], sources: [String(row.source_id)], rules: workflowRuleIds });
+        const sourceCursor = sourceCursorRows.get(String(row.source_id)); const run = runRows[0];
+        return record("receipts", `${runId}:${String(row.source_id)}`, { ...row, execution_channel: executionChannel, connector_type: source?.connector.type,
+          connector_version: source ? connectorFor(source).descriptor.version : undefined, retryable: row.result === "failed", scan_frequency: source?.scheduleState?.frequency,
+          due_manifest_digest: runResult?.integrityManifest?.dueManifestDigest ?? run?.due_manifest_digest,
+          ...(typeof row.source_snapshot_json === "string" ? { request_payload_digest: hashJson(JSON.parse(row.source_snapshot_json)) } : {}),
+          source_effective_updated_at: sourceCursor?.last_effective_update_at }, { runs: [runId], sources: [String(row.source_id)], rules: workflowRuleIds });
       }),
     ];
   }

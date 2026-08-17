@@ -317,6 +317,29 @@ describe("formal run", () => {
     await expect(runFormalProject(configPath, { now: new Date("2026-08-13T05:00:00Z"), retryFailed: true, provider: new FixtureModelProvider() })).rejects.toThrow("no failed operations");
   }, 60_000);
 
+  it("resumes execution failures without misrouting them into process-store finalization", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-stage-failure-retry-"));
+    const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
+    const config = await loadEffectiveConfig(configPath);
+    const runId = "RUN-20260816-DAILY";
+    const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+    state.beginFormalRun(config, runId, "2026-08-16T02:00:00Z", { stages: ["initialize", "publish"] });
+    state.freezeDueSources(runId, [config.preset.sources[0]!], "stage-failure-fixture");
+    state.failFormalRun(runId, "2026-08-16T02:01:00Z", "publish", "artifact validation failed");
+    state.close();
+
+    const recovered = await runFormalProject(configPath, {
+      now: new Date("2026-08-16T03:00:00Z"),
+      retryFailed: true,
+      provider: new FixtureModelProvider(),
+      fetch: async (url) => sourceResponse(String(url)),
+    });
+    expect(recovered).toMatchObject({ runId, resumed: true, publicationState: "published" });
+    expect(recovered.result.generatedAt).toBe("2026-08-16T02:00:00Z");
+    expect(recovered.outcome).not.toBe("failed");
+    await expect(verifyReplay(configPath, runId)).resolves.toMatchObject({ matches: true });
+  }, 60_000);
+
   it("immutably refetches and promotes legacy primary items with anchored source evidence", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-reverify-"));
     const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });

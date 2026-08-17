@@ -7,6 +7,7 @@ import { assertSafeReadPath } from "../config/paths.js";
 import { computerUseAllowedHosts, isComputerUseSource, type ComputerUseSource } from "./computer-use.js";
 import { isCodexBrowserSource, type CodexBrowserSource } from "./codex-browser.js";
 import { inAppBrowserAllowedHosts, isInAppBrowserSource, type InAppBrowserSource } from "./in-app-browser.js";
+import { retainExcerpt } from "./retention.js";
 import type { CaptureEnvelope } from "./types.js";
 
 export interface ExternalCaptureResult {
@@ -102,7 +103,7 @@ function normalizeXCapture(
     externalKey: match[2]!,
     canonicalUrl: `https://x.com/${source.connector.config.username}/status/${match[2]}`,
     title,
-    summary: text.slice(0, 1_000),
+    summary: retainExcerpt(text),
     capturedAt: generatedAt.toISOString(),
     ...(publishedAt ? { publishedAt: publishedAt.toISOString(), publishedRaw: capture.publishedAt } : {}),
     contentHash: createHash("sha256").update(text).digest("hex"),
@@ -146,7 +147,7 @@ function normalizeComputerUseCapture(
     externalKey: createHash("sha256").update(canonical).digest("hex").slice(0, 32),
     canonicalUrl: canonical,
     title,
-    summary: text.slice(0, 1_000),
+    summary: retainExcerpt(text),
     capturedAt: generatedAt.toISOString(),
     ...(publishedAt && dateKind === "event" ? { publishedAt: publishedAt.toISOString(), publishedRaw: capture.publishedAt } : {}),
     ...(publishedAt && dateKind === "page-updated" ? { pageUpdatedAt: publishedAt.toISOString(), pageUpdatedRaw: capture.publishedAt } : {}),
@@ -189,7 +190,7 @@ function normalizeInAppBrowserCapture(
     externalKey: createHash("sha256").update(canonical).digest("hex").slice(0, 32),
     canonicalUrl: canonical,
     title,
-    summary: text.slice(0, 1_000),
+    summary: retainExcerpt(text),
     capturedAt: generatedAt.toISOString(),
     ...(publishedAt && dateKind === "event" ? { publishedAt: publishedAt.toISOString(), publishedRaw: capture.publishedAt } : {}),
     ...(publishedAt && dateKind === "page-updated" ? { pageUpdatedAt: publishedAt.toISOString(), pageUpdatedRaw: capture.publishedAt } : {}),

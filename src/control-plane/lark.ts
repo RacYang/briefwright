@@ -657,7 +657,8 @@ export interface LarkTableAudit {
   requiredBlankFields: Array<{ name: string; blank: number; filled: number }>;
 }
 
-function blankLarkValue(value: unknown): boolean {
+function blankLarkValue(value: unknown, fieldType?: string): boolean {
+  if (fieldType === "checkbox") return false;
   return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
 }
 
@@ -673,7 +674,7 @@ export function auditLarkControlPlane(
     const actualByName = new Map(actualFields.map((field) => [field.name, String(field.type)]));
     const inventory = new Map(LARK_FIELD_INVENTORY[kind].map((field) => [field.name, field.type]));
     const rows = client.records(config.tables[kind], actualFields.map((field) => field.name));
-    const blankCounts = new Map(actualFields.map((field) => [field.name, rows.reduce((count, row) => count + Number(blankLarkValue(row.fields[field.name])), 0)]));
+    const blankCounts = new Map(actualFields.map((field) => [field.name, rows.reduce((count, row) => count + Number(blankLarkValue(row.fields[field.name], String(field.type))), 0)]));
     const blankFields = actualFields.flatMap((field) => {
       const blank = blankCounts.get(field.name) ?? 0; const filled = rows.length - blank;
       return blank ? [{ name: field.name, blank, filled }] : [];

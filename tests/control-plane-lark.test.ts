@@ -35,7 +35,7 @@ describe("Lark control plane", () => {
       ] };
       if (args.includes("+record-list")) {
         const requested = args.flatMap((arg, index) => arg === "--field-id" ? [args[index + 1]!] : []);
-        return { record_id_list: [`rec_${kind}`], fields: requested, data: [requested.map((field) => kind === "items" && field === "标题" ? null : "filled")], has_more: false };
+        return { record_id_list: [`rec_${kind}`], fields: requested, data: [requested.map((field) => kind === "items" && field === "标题" ? null : kind === "rules" && field === "人工锁定" ? null : "filled")], has_more: false };
       }
       throw new Error(`unexpected call ${args.join(" ")}`);
     };
@@ -43,6 +43,7 @@ describe("Lark control plane", () => {
     expect(result.ready).toBe(false);
     expect(result.tables.find((table) => table.kind === "runs")?.unrecognizedFields).toEqual(["未受管列"]);
     expect(result.tables.find((table) => table.kind === "items")?.requiredBlankFields).toContainEqual({ name: "标题", blank: 1, filled: 0 });
+    expect(result.tables.find((table) => table.kind === "rules")?.requiredBlankFields).not.toContainEqual(expect.objectContaining({ name: "人工锁定" }));
   });
 
   it("provisions a blank Base idempotently with nine standard tables and relationship fields", () => {

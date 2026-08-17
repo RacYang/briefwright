@@ -136,6 +136,12 @@ function optionalInteger(value: unknown): number | undefined {
   return undefined;
 }
 
+function larkRating(value: unknown): number | undefined {
+  const numeric = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(numeric)) return undefined;
+  return Math.max(1, Math.min(5, numeric <= 5 ? Math.round(numeric) : Math.ceil(numeric / 20)));
+}
+
 function historicalPayload(kind: ControlEntityKind, id: string, fields: Record<string, unknown>, links: NonNullable<CanonicalControlRecord["links"]>): Record<string, unknown> {
   if (kind === "runs") return compact({ run_id: id, status: first(fields["状态"]) === "成功" ? "success" : first(fields["状态"]) === "部分成功" ? "partial" : first(fields["状态"]) === "健康空结果" ? "empty" : first(fields["状态"]) === "失败" ? "failed" : "running",
     publication_state: first(fields["发布状态"]) === "已发布" ? "published" : "withheld",
@@ -465,7 +471,7 @@ function compatibilityLarkFields(record: CanonicalControlRecord, links: Partial<
       "近30天更新率": scans && updates !== undefined ? updates / scans : undefined,
       "近30天入围率": scans && selections !== undefined ? selections / scans : undefined,
       "连续失败次数": p.consecutive_failures, "连续无更新次数": p.consecutive_no_update,
-      "最近调频": larkDate(p.last_cadence_adjusted_at), "机构": p.organization, "权威分": p.authority_score ?? p.priority,
+      "最近调频": larkDate(p.last_cadence_adjusted_at), "机构": p.organization, "权威分": larkRating(p.authority_score ?? p.priority),
       "调频原因": p.cadence_reason, "备注": p.notes, "连续建议周期": p.cadence_streak,
       "建议频率": p.cadence_proposal, "调频分": p.cadence_score, "基准频率": current === "weekly" ? "每周" : current === "on-demand" ? "按需" : current === "daily" ? "每日" : current,
       "发现条目": linked("items"), "原始采集": linked("captures"), "扫描回执": linked("receipts"),

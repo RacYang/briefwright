@@ -13,7 +13,7 @@ import { doctorReport, runDoctor } from "./commands/doctor.js";
 import { addProjectFeedback, projectFeedbackSummary, FEEDBACK_TYPES } from "./commands/feedback.js";
 import { initializeProject } from "./commands/init.js";
 import { setupProject } from "./commands/setup.js";
-import { importContract, importLarkSnapshot, provisionLarkProject, syncProject } from "./commands/import-sync.js";
+import { auditLarkProject, backfillLarkProject, importContract, importLarkSnapshot, provisionLarkProject, syncProject } from "./commands/import-sync.js";
 import { migrateSources } from "./commands/source-migration.js";
 import { diagnoseProject, listImprovementProposals } from "./commands/improve.js";
 import { commitKnowledge, proposeKnowledge } from "./commands/knowledge.js";
@@ -341,6 +341,40 @@ importCommand.command("contract")
   .action(async (contractPath: string, { config }: { config: string }) => { const result = await importContract(config, contractPath); if (isJsonOutput()) return writeJson({ ok: true, command: "import contract", ...result }); console.log(`Imported contract ${result.contentDigest} to ${result.outputPath}`); });
 
 const larkCommand = program.command("lark").description("Provision or inspect the recommended Feishu Base control plane through lark-cli.");
+larkCommand.command("audit")
+  .description("Read all nine tables and fail when fields are unrecognized or core row values are blank.")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config }: { config: string }) => {
+    const result = await auditLarkProject(config);
+    if (isJsonOutput()) {
+      writeJson({ ok: result.ready, command: "lark audit", ...result });
+      if (!result.ready) process.exitCode = 1;
+      return;
+    }
+    for (const table of result.tables) console.log(`${table.requiredBlankFields.length || table.missingManagedFields.length || table.unrecognizedFields.length || table.typeMismatches.length ? "FAIL" : "PASS"} ${table.kind}: ${table.records} records, ${table.fields} fields, ${table.requiredBlankFields.length} incomplete core fields`);
+    if (!result.ready) process.exitCode = 1;
+  });
+larkCommand.command("backfill")
+  .description("Plan an evidence-only update of existing Base rows; never creates or deletes records.")
+  .option("--apply", "write only the planned existing-record updates", false)
+  .option("--yes", "confirm external Base record writes", false)
+  .option("--expect-digest <sha256>", "bind apply to the reviewed dry-run plan digest")
+  .option("--expect-updates <count>", "bind apply to the reviewed update count")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config, apply, yes, expectDigest, expectUpdates }: { config: string; apply: boolean; yes: boolean; expectDigest?: string; expectUpdates?: string }) => {
+    const expectedUpdates = expectUpdates === undefined ? undefined : Number(expectUpdates);
+    if (expectedUpdates !== undefined && (!Number.isSafeInteger(expectedUpdates) || expectedUpdates < 0)) throw new Error("--expect-updates must be a non-negative integer");
+    const result = await backfillLarkProject(config, apply, yes, expectDigest, expectedUpdates);
+    const ok = !result.applied || result.result?.acknowledged === true;
+    if (isJsonOutput()) {
+      writeJson({ ok, command: "lark backfill", ...result });
+      if (!ok) process.exitCode = 1;
+      return;
+    }
+    console.log(`${result.applied ? "Applied" : "Plan"}: ${result.updates} existing rows updated; ${result.localOnlySkipped} local-only rows skipped.`);
+    if (!result.applied && result.updates) console.log("No Base changes made. Re-run with --apply --yes after reviewing this exact plan.");
+    if (!ok) process.exitCode = 1;
+  });
 larkCommand.command("provision")
   .description("Idempotently create missing standard tables and fields; never deletes or renames data.")
   .requiredOption("--yes", "confirm external Base schema writes")

@@ -4,10 +4,19 @@ import type { ControlEntityKind } from "./types.js";
 const options = (...names: string[]) => names.map((name) => ({ name }));
 const domains = ["基础", "机器学习与深度学习", "模型与生成式 AI", "数据与知识", "系统与工程", "安全与治理", "应用域", "Agent"];
 
-export const LARK_FIELD_MANIFEST_VERSION = "briefwright-lark-v2";
+export const LARK_FIELD_MANIFEST_VERSION = "briefwright-lark-v3";
 
 export interface LarkManifestField extends LarkFieldDefinition {
   target?: ControlEntityKind;
+}
+
+export type LarkObservedFieldType = LarkFieldDefinition["type"] | "created_at" | "updated_at" | "user";
+
+export interface LarkCompatibilityField {
+  name: string;
+  type: LarkObservedFieldType;
+  target?: ControlEntityKind;
+  stewardship: "system" | "historical";
 }
 
 const text = (name: string): LarkManifestField => ({ name, type: "text" });
@@ -100,6 +109,78 @@ export const LARK_FIELD_MANIFEST: Record<ControlEntityKind, readonly LarkManifes
   ],
 };
 
+const system = (name: string, type: "created_at" | "updated_at" | "user"): LarkCompatibilityField => ({ name, type, stewardship: "system" });
+const historical = (name: string, type: LarkObservedFieldType, target?: ControlEntityKind): LarkCompatibilityField => ({ name, type, ...(target ? { target } : {}), stewardship: "historical" });
+
+/**
+ * Fields retained by the production Base in addition to the managed v3 schema.
+ * They are deliberately inventoried instead of being silently ignored. System
+ * fields are read-only; historical fields remain compatibility surfaces until
+ * a separately confirmed data migration retires or backfills them.
+ */
+export const LARK_COMPATIBILITY_FIELDS: Record<ControlEntityKind, readonly LarkCompatibilityField[]> = {
+  sources: [
+    historical("近30天更新率", "number"), historical("连续失败次数", "number"), historical("最近调频", "datetime"),
+    historical("发现条目", "link", "items"), historical("近30天入围数", "number"), system("创建时间", "created_at"),
+    historical("机构", "text"), historical("权威分", "number"), historical("调频原因", "text"), historical("连续无更新次数", "number"),
+    historical("备注", "text"), historical("近30天扫描数", "number"), historical("近30天有效更新数", "number"), historical("连续建议周期", "number"),
+    historical("原始采集", "link", "captures"), historical("建议频率", "select"), historical("近30天入围率", "number"),
+    historical("扫描回执", "link", "receipts"), historical("调频分", "number"), system("更新时间", "updated_at"), historical("基准频率", "select"),
+  ],
+  runs: [
+    historical("错误数", "number"), system("创建时间", "created_at"), historical("发现数", "number"), system("更新时间", "updated_at"),
+    historical("覆盖开始", "datetime"), historical("核验数", "number"), historical("覆盖结束", "datetime"),
+  ],
+  items: [
+    historical("发现渠道", "select"), historical("去重键", "text"), historical("可行动分", "number"), historical("相关性分", "number"),
+    historical("URL 指纹", "text"), historical("人工反馈", "link", "feedback"), historical("事件日期", "datetime"), historical("证据分", "number"),
+    system("更新时间", "updated_at"), system("创建时间", "created_at"), historical("淘汰原因", "text"), historical("候选编号", "text"),
+    historical("重复于", "link", "items"), historical("时效分", "number"), historical("发布日期", "datetime"), historical("关键短摘录", "text"),
+    historical("新颖分", "number"), historical("来源权威分", "number"), historical("交叉领域", "select"), historical("Obsidian 链接", "text"),
+    historical("影响分", "number"),
+  ],
+  events: [system("创建时间", "created_at"), historical("旧规则标识（迁移前）", "text")],
+  feedback: [historical("反馈前状态", "select"), historical("反馈后状态", "select"), system("创建时间", "created_at"), system("反馈人", "user")],
+  experiments: [
+    historical("基线指标", "text"), historical("旧基线标识（迁移前）", "text"), historical("样本窗口开始", "datetime"),
+    historical("相关状态事件", "link", "events"), historical("旧候选标识（迁移前）", "text"), historical("发布时间", "datetime"),
+    system("审批人", "user"), historical("触发反馈", "link", "feedback"), historical("样本窗口结束", "datetime"),
+    system("更新时间", "updated_at"), system("创建时间", "created_at"),
+  ],
+  captures: [
+    system("更新时间", "updated_at"), historical("解析结果", "text"), historical("原始快照位置", "text"),
+    system("创建时间", "created_at"), historical("保留级别", "select"),
+  ],
+  rules: [
+    historical("入围阈值", "number"), historical("失效时间", "datetime"), historical("来源实验", "link", "experiments"),
+    historical("人工复核阈值", "number"), historical("审批说明", "text"), system("审批人", "user"), system("创建时间", "created_at"),
+    historical("生效时间", "datetime"), historical("指标与权重", "text"), historical("硬性门槛", "text"), system("更新时间", "updated_at"),
+    historical("状态事件", "link", "events"), historical("运行批次", "link", "runs"), historical("单领域上限", "number"), historical("每日总上限", "number"),
+  ],
+  receipts: [system("创建时间", "created_at"), historical("频率快照", "select")],
+};
+
+export const LARK_FIELD_INVENTORY: Record<ControlEntityKind, ReadonlyArray<{ name: string; type: LarkObservedFieldType }>> = Object.fromEntries(
+  Object.keys(LARK_FIELD_MANIFEST).map((kind) => {
+    const typedKind = kind as ControlEntityKind;
+    return [typedKind, [...LARK_FIELD_MANIFEST[typedKind], ...LARK_COMPATIBILITY_FIELDS[typedKind]].map(({ name, type }) => ({ name, type }))];
+  }),
+) as unknown as Record<ControlEntityKind, ReadonlyArray<{ name: string; type: LarkObservedFieldType }>>;
+
+/** Core fields that every managed row must carry. Optional, failure-only,
+ * lineage-only and system-generated fields are intentionally excluded. */
+export const LARK_ROW_COMPLETENESS_FIELDS: Record<ControlEntityKind, readonly string[]> = {
+  sources: ["Source ID", "名称", "状态", "来源类型", "入口 URL", "采集方式", "来源层级", "扫描频率", "连接器类型"],
+  runs: ["Run ID", "状态", "发布状态", "当前阶段", "触发类型", "运行类型", "运行模式", "开始时间", "配置摘要"],
+  items: ["Item ID", "标题", "当前状态", "处置结果", "Canonical URL", "Canonical Identity", "Capture Hash", "抓取时间", "中文摘要", "为什么值得关注", "主领域", "证据状态", "总分", "评分版本", "分析状态", "模型 Provider", "模型名称", "Prompt 版本", "分析时间", "条目快照摘要", "新鲜度判定", "日期语义"],
+  events: ["Event ID", "事件时间", "所属阶段", "事件类型", "实体类型", "实体 ID", "完整载荷 JSON", "运行内序号", "事件 Schema 版本", "严重级别", "原状态", "新状态", "执行者", "迁移原因", "幂等键", "载荷指纹", "运行批次"],
+  feedback: ["Feedback ID", "反馈时间", "判断", "原因标签", "反馈说明", "反馈类型", "处理状态", "幂等键", "载荷指纹", "反馈来源渠道"],
+  experiments: ["Experiment ID", "标题", "状态", "假设", "基线策略摘要", "候选策略摘要", "样本摘要", "基线策略 JSON", "候选策略 JSON", "样本 JSON", "指标结果 JSON", "Guardrail 结果 JSON", "评审条目数", "观察天数", "14天门槛通过", "50条评审门槛通过", "实验 Revision"],
+  captures: ["Capture ID", "External Key", "发现 URL", "最终 URL", "Canonical 候选 URL", "发现渠道", "发现时间", "抓取时间", "抓取状态", "提取状态", "尝试次数", "原始标题", "短摘录", "内容哈希", "载荷指纹", "解析器版本", "连接器类型", "连接器版本", "日期语义", "原始载荷摘要", "保留策略", "运行批次", "数据源"],
+  rules: ["Rule ID", "版本", "标题", "规则类型", "状态", "规则说明", "配置 JSON", "校验和", "Policy ID", "Policy 版本", "Policy 摘要", "规则来源", "Rule Schema 版本", "人工锁定", "不可变 Revision"],
+  receipts: ["Scan ID", "扫描结果", "到期原因", "开始时间", "结束时间", "工作流版本", "发现 URL 数", "耗时毫秒", "执行通道", "尝试次数", "连接器类型", "连接器版本", "到期清单摘要", "运行批次", "数据源", "工作流规则"],
+};
+
 export const LARK_ID_FIELDS: Record<ControlEntityKind, string> = {
   sources: "Source ID", runs: "Run ID", items: "Item ID", events: "Event ID", feedback: "Feedback ID",
   experiments: "Experiment ID", captures: "Capture ID", rules: "Rule ID", receipts: "Scan ID",
@@ -111,4 +192,8 @@ export const LARK_SCALAR_FIELDS: Record<ControlEntityKind, LarkFieldDefinition[]
 
 export const LARK_LINK_FIELDS: Partial<Record<ControlEntityKind, Array<{ name: string; target: ControlEntityKind }>>> = Object.fromEntries(
   Object.entries(LARK_FIELD_MANIFEST).map(([kind, fields]) => [kind, fields.flatMap((field) => field.type === "link" && field.target ? [{ name: field.name, target: field.target }] : [])]),
+) as Partial<Record<ControlEntityKind, Array<{ name: string; target: ControlEntityKind }>>>;
+
+export const LARK_COMPATIBILITY_LINK_FIELDS: Partial<Record<ControlEntityKind, Array<{ name: string; target: ControlEntityKind }>>> = Object.fromEntries(
+  Object.entries(LARK_COMPATIBILITY_FIELDS).map(([kind, fields]) => [kind, fields.flatMap((field) => field.type === "link" && field.target ? [{ name: field.name, target: field.target }] : [])]),
 ) as Partial<Record<ControlEntityKind, Array<{ name: string; target: ControlEntityKind }>>>;

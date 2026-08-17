@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION } from "../src/control-plane/lark-field-manifest.js";
+import { assertBackfillAuthorization } from "../src/commands/import-sync.js";
+import { LARK_COMPATIBILITY_FIELDS, LARK_FIELD_INVENTORY, LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION } from "../src/control-plane/lark-field-manifest.js";
 import { larkFields } from "../src/control-plane/lark.js";
 import type { ControlEntityKind } from "../src/control-plane/types.js";
 
@@ -16,12 +17,45 @@ const checklist: Record<ControlEntityKind, string[]> = {
   receipts: ["尝试次数", "错误码", "连接器类型", "连接器版本", "游标前摘要", "游标后摘要", "是否可重试", "下次重试时间", "外部请求 ID", "到期清单摘要", "请求载荷摘要", "结构化详情 JSON", "来源有效更新时间"],
 };
 
+const productionExtras: Record<ControlEntityKind, string[]> = {
+  sources: ["近30天更新率", "连续失败次数", "最近调频", "发现条目", "近30天入围数", "创建时间", "机构", "权威分", "调频原因", "连续无更新次数", "备注", "近30天扫描数", "近30天有效更新数", "连续建议周期", "原始采集", "建议频率", "近30天入围率", "扫描回执", "调频分", "更新时间", "基准频率"],
+  runs: ["错误数", "创建时间", "发现数", "更新时间", "覆盖开始", "核验数", "覆盖结束"],
+  items: ["发现渠道", "去重键", "可行动分", "相关性分", "URL 指纹", "人工反馈", "事件日期", "证据分", "更新时间", "创建时间", "淘汰原因", "候选编号", "重复于", "时效分", "发布日期", "关键短摘录", "新颖分", "来源权威分", "交叉领域", "Obsidian 链接", "影响分"],
+  events: ["创建时间", "旧规则标识（迁移前）"],
+  feedback: ["反馈前状态", "反馈后状态", "创建时间", "反馈人"],
+  experiments: ["基线指标", "旧基线标识（迁移前）", "样本窗口开始", "相关状态事件", "旧候选标识（迁移前）", "发布时间", "审批人", "触发反馈", "样本窗口结束", "更新时间", "创建时间"],
+  captures: ["更新时间", "解析结果", "原始快照位置", "创建时间", "保留级别"],
+  rules: ["入围阈值", "失效时间", "来源实验", "人工复核阈值", "审批说明", "审批人", "创建时间", "生效时间", "指标与权重", "硬性门槛", "更新时间", "状态事件", "运行批次", "单领域上限", "每日总上限"],
+  receipts: ["创建时间", "频率快照"],
+};
+
+const productionFieldCounts: Record<ControlEntityKind, number> = {
+  sources: 55, runs: 74, items: 60, events: 28, feedback: 25, experiments: 42, captures: 53, rules: 43, receipts: 35,
+};
+
 describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
+  it("binds every applied backfill to the exact reviewed digest and update count", () => {
+    expect(() => assertBackfillAuthorization({ digest: "abc", updates: 1549 }, "abc", 1549)).not.toThrow();
+    expect(() => assertBackfillAuthorization({ digest: "changed", updates: 1549 }, "abc", 1549)).toThrow(/digest changed/);
+    expect(() => assertBackfillAuthorization({ digest: "abc", updates: 1550 }, "abc", 1549)).toThrow(/update count changed/);
+    expect(() => assertBackfillAuthorization({ digest: "abc", updates: 1549 })).toThrow(/requires --expect-digest and --expect-updates/);
+  });
+
   it("contains every field in the accepted nine-table checklist exactly once", () => {
     for (const [kind, required] of Object.entries(checklist) as Array<[ControlEntityKind, string[]]>) {
       const names = LARK_FIELD_MANIFEST[kind].map((field) => field.name);
       expect(new Set(names).size, `${kind} has duplicate field names`).toBe(names.length);
       expect(names).toEqual(expect.arrayContaining(required));
+    }
+  });
+
+  it("covers the complete observed production schema instead of only newly managed columns", () => {
+    for (const kind of Object.keys(productionExtras) as ControlEntityKind[]) {
+      const compatibility = LARK_COMPATIBILITY_FIELDS[kind].map((field) => field.name);
+      const inventory = LARK_FIELD_INVENTORY[kind].map((field) => field.name);
+      expect(compatibility, `${kind} production compatibility fields drifted`).toEqual(productionExtras[kind]);
+      expect(new Set(inventory).size, `${kind} inventory has duplicate names`).toBe(inventory.length);
+      expect(inventory, `${kind} production inventory is incomplete`).toHaveLength(productionFieldCounts[kind]);
     }
   });
 
@@ -39,6 +73,9 @@ describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
     expect(larkFields({ kind: "receipts", id: "SCAN-1", payload: { result: "observed", attempts: 2, error_code: "RATE_LIMIT", connector_type: "rss", retryable: true } }))
       .toMatchObject({ 扫描结果: "已观察", 尝试次数: 2, 错误码: "RATE_LIMIT", 连接器类型: "rss", 是否可重试: true });
     expect(larkFields({ kind: "items", id: "ITEM-1", payload: { disposition: "daily", score: 91, analysis_json: JSON.stringify({ claims: ["claim"], knowledgePotential: { reusableQuestion: true }, scoreDimensions: { authority: { value: 5, weight: 1, weighted: 5, reason: "primary" } } }) } }))
-      .toMatchObject({ 处置结果: "daily", "主张 JSON": "[\"claim\"]", "知识潜力 JSON": expect.stringContaining("reusableQuestion"), "各维度评分理由 JSON": expect.stringContaining("primary") });
+      .toMatchObject({ 处置结果: "daily", "主张 JSON": "[\"claim\"]", "知识潜力 JSON": expect.stringContaining("reusableQuestion"), "各维度评分理由 JSON": expect.stringContaining("primary"), 来源权威分: 5 });
+    expect(larkFields({ kind: "sources", id: "SRC-1", payload: { id: "SRC-1", title: "Source", enabled: true, sourceType: "website", evidenceTier: "primary", priority: 90,
+      connector: { type: "webpage", config: { url: "https://example.com" } }, scans_30d: 10, updates_30d: 4, selections_30d: 2 } }))
+      .toMatchObject({ 近30天扫描数: 10, 近30天有效更新数: 4, 近30天入围数: 2, 近30天更新率: 0.4, 近30天入围率: 0.2, 权威分: 90 });
   });
 });

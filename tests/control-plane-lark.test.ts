@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { LarkControlPlaneStore, larkFields, larkSource, provisionLarkControlPlane } from "../src/control-plane/lark.js";
+import { auditLarkControlPlane, LarkControlPlaneStore, larkFields, larkSource, provisionLarkControlPlane } from "../src/control-plane/lark.js";
+import { LARK_FIELD_INVENTORY, LARK_FIELD_MANIFEST } from "../src/control-plane/lark-field-manifest.js";
 import { reconciliationRecords } from "../src/control-plane/registry.js";
 import type { LarkFieldDefinition, LarkRunner } from "../src/control-plane/lark-cli.js";
 import type { LarkTableMapping } from "../src/config/types.js";
@@ -9,6 +10,26 @@ import type { CanonicalControlRecord, SyncPlan } from "../src/control-plane/type
 const tables = Object.fromEntries(["sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts"].map((kind) => [kind, `tbl_${kind}`])) as unknown as LarkTableMapping;
 
 describe("Lark control plane", () => {
+  it("fails the read-only audit for an unrecognized production field or blank core value", () => {
+    const kindByTable = new Map(Object.entries(tables).map(([kind, table]) => [table, kind as keyof typeof LARK_FIELD_MANIFEST]));
+    const runner: LarkRunner = (args) => {
+      const table = args[args.indexOf("--table-id") + 1]!; const kind = kindByTable.get(table)!;
+      if (args.includes("+field-list")) return { fields: [
+        ...LARK_FIELD_MANIFEST[kind].map((field, index) => ({ ...field, id: `fld_${index}`, ...(field.type === "link" ? { link_table: tables[field.target!] } : {}) })),
+        ...(kind === "runs" ? [{ id: "fld_unknown", name: "未受管列", type: "text" as const }] : []),
+      ] };
+      if (args.includes("+record-list")) {
+        const requested = args.flatMap((arg, index) => arg === "--field-id" ? [args[index + 1]!] : []);
+        return { record_id_list: [`rec_${kind}`], fields: requested, data: [requested.map((field) => kind === "items" && field === "标题" ? null : "filled")], has_more: false };
+      }
+      throw new Error(`unexpected call ${args.join(" ")}`);
+    };
+    const result = auditLarkControlPlane({ baseToken: "base", identity: "user", tables }, runner);
+    expect(result.ready).toBe(false);
+    expect(result.tables.find((table) => table.kind === "runs")?.unrecognizedFields).toEqual(["未受管列"]);
+    expect(result.tables.find((table) => table.kind === "items")?.requiredBlankFields).toContainEqual({ name: "标题", blank: 1, filled: 0 });
+  });
+
   it("provisions a blank Base idempotently with nine standard tables and relationship fields", () => {
     const calls: string[][] = []; const fields = new Map<string, Array<LarkFieldDefinition & { id: string }>>(); const tableNames = new Map<string, string>(); let next = 0;
     const runner: LarkRunner = (args) => {
@@ -102,6 +123,25 @@ describe("Lark control plane", () => {
       connector: { type: "computer-use", config: { url: "https://example.com/news", allowedHosts: ["example.com"] } } } }]);
     expect(plan.updates).toHaveLength(1);
     expect(plan.unchanged).toHaveLength(0);
+  });
+
+  it("keeps compatibility columns out of normal planning but includes them in an explicit backfill plan", async () => {
+    const record: CanonicalControlRecord = { kind: "sources", id: "SRC-BACKFILL", payload: { id: "SRC-BACKFILL", title: "Backfill", enabled: true,
+      sourceType: "website", evidenceTier: "primary", priority: 90, scans_30d: 10, updates_30d: 4, selections_30d: 2,
+      connector: { type: "webpage", config: { url: "https://example.com" } } } };
+    const expected = larkFields(record);
+    const runner: LarkRunner = (args) => {
+      if (args.includes("+field-list")) return { fields: LARK_FIELD_INVENTORY.sources.map((field, index) => ({ ...field, id: `fld_${index}` })) };
+      if (args.includes("+record-list")) {
+        const requested = args.flatMap((arg, index) => arg === "--field-id" ? [args[index + 1]!] : []);
+        return { record_id_list: ["rec_source"], fields: requested,
+          data: [requested.map((field) => field === "近30天扫描数" ? null : expected[field] ?? null)], has_more: false };
+      }
+      throw new Error(`unexpected call ${args.join(" ")}`);
+    };
+    const store = new LarkControlPlaneStore({ baseToken: "base", identity: "user", tables }, runner);
+    expect((await store.plan([record])).unchanged).toHaveLength(1);
+    expect((await store.plan([record], { includeCompatibility: true })).updates).toHaveLength(1);
   });
 
   it("plans and emits explicit field clears when a browser source becomes a direct webpage", async () => {

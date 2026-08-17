@@ -545,6 +545,10 @@ export class SqliteStateStore {
     ];
   }
 
+  runIds(): string[] {
+    return (this.database.prepare("SELECT run_id FROM runs ORDER BY generated_at,run_id").all() as Array<{ run_id: string }>).map((row) => row.run_id);
+  }
+
   dueSourceIds(runId: string): string[] {
     return (this.database.prepare("SELECT source_id FROM due_sources WHERE run_id=? ORDER BY ordinal").all(runId) as Array<{ source_id: string }>).map((row) => row.source_id);
   }

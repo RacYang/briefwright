@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { EffectiveConfig, RuleSnapshot, SourceDefinition } from "../config/types.js";
 import { canonicalJson } from "../config/load.js";
 import { LarkCliClient, systemLarkRunner, type LarkRunner } from "./lark-cli.js";
-import { LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION, LARK_ID_FIELDS, LARK_LINK_FIELDS, LARK_SCALAR_FIELDS } from "./lark-field-manifest.js";
+import { LARK_COMPATIBILITY_LINK_FIELDS, LARK_FIELD_INVENTORY, LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION, LARK_ID_FIELDS, LARK_LINK_FIELDS, LARK_ROW_COMPLETENESS_FIELDS, LARK_SCALAR_FIELDS } from "./lark-field-manifest.js";
 import type { CanonicalControlRecord, ControlEntityKind, ControlPlaneCheck, ControlPlaneSnapshot, ControlPlaneStore, SyncPlan, SyncResult } from "./types.js";
 
 /* Public compatibility export derived from the sole versioned field contract. */
@@ -224,8 +224,10 @@ function comparisonFields(record: CanonicalControlRecord, fields: Record<string,
   }));
 }
 
-function writableLarkFields(_kind: ControlEntityKind, fields: Record<string, unknown>): Record<string, unknown> {
-  return fields;
+function writableLarkFields(_kind: ControlEntityKind, fields: Record<string, unknown>, available?: Set<string>): Record<string, unknown> {
+  if (!available) return fields;
+  const managed = new Set(LARK_FIELD_MANIFEST[_kind].map((field) => field.name));
+  return Object.fromEntries(Object.entries(fields).filter(([name]) => managed.has(name) || available.has(name)));
 }
 
 function captureDiscoveryChannel(value: unknown, url: unknown): string {
@@ -271,7 +273,7 @@ const SOURCE_TYPE_TO_LARK: Record<NonNullable<SourceDefinition["sourceType"]>, s
   paper: "论文", regulation: "监管与标准", media: "媒体", other: "其他",
 };
 
-export function larkFields(record: CanonicalControlRecord, links: Partial<Record<ControlEntityKind, Map<string, string>>> = {}): Record<string, unknown> {
+function managedLarkFields(record: CanonicalControlRecord, links: Partial<Record<ControlEntityKind, Map<string, string>>> = {}): Record<string, unknown> {
   const p = record.payload;
   const linked = (kind: ControlEntityKind): Array<{ id: string }> | undefined => {
     const ids = record.links?.[kind]?.map((id) => links[kind]?.get(id)).filter((id): id is string => Boolean(id));
@@ -429,9 +431,100 @@ export function larkFields(record: CanonicalControlRecord, links: Partial<Record
   return p;
 }
 
-function larkLinkFields(record: CanonicalControlRecord, links: Partial<Record<ControlEntityKind, Map<string, string>>>): Record<string, unknown> {
+function dimensionValue(dimensions: Record<string, unknown>, key: string): number | undefined {
+  const value = jsonObject(dimensions[key]).value;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function compatibilityLarkFields(record: CanonicalControlRecord, links: Partial<Record<ControlEntityKind, Map<string, string>>>): Record<string, unknown> {
+  const p = record.payload;
+  const linked = (kind: ControlEntityKind): Array<{ id: string }> | undefined => {
+    const ids = record.links?.[kind]?.map((id) => links[kind]?.get(id)).filter((id): id is string => Boolean(id));
+    return ids?.length ? ids.map((id) => ({ id })) : undefined;
+  };
+  if (record.kind === "sources") {
+    const scans = optionalInteger(p.scans_30d); const updates = optionalInteger(p.updates_30d); const selections = optionalInteger(p.selections_30d);
+    const schedule = jsonObject(p.scheduleState); const current = first(schedule.frequency) ?? first(p.scan_frequency);
+    return compact({
+      "近30天扫描数": scans, "近30天有效更新数": updates, "近30天入围数": selections,
+      "近30天更新率": scans && updates !== undefined ? updates / scans : undefined,
+      "近30天入围率": scans && selections !== undefined ? selections / scans : undefined,
+      "连续失败次数": p.consecutive_failures, "连续无更新次数": p.consecutive_no_update,
+      "最近调频": larkDate(p.last_cadence_adjusted_at), "机构": p.organization, "权威分": p.authority_score ?? p.priority,
+      "调频原因": p.cadence_reason, "备注": p.notes, "连续建议周期": p.cadence_streak,
+      "建议频率": p.cadence_proposal, "调频分": p.cadence_score, "基准频率": current === "weekly" ? "每周" : current === "on-demand" ? "按需" : current === "daily" ? "每日" : current,
+      "发现条目": linked("items"), "原始采集": linked("captures"), "扫描回执": linked("receipts"),
+    });
+  }
+  if (record.kind === "runs") {
+    const result = jsonObject(p.result_json); const completion = jsonObject(result.completionReport); const coverage = jsonObject(result.coverageWindow);
+    const modelFailures = Array.isArray(result.modelFailures) ? result.modelFailures.length : undefined;
+    const failed = optionalInteger(completion.failed);
+    return compact({
+      "错误数": p.error_count ?? (failed !== undefined || modelFailures !== undefined ? (failed ?? 0) + (modelFailures ?? 0) : undefined),
+      "发现数": p.discovered_count ?? result.discoveredCount, "核验数": p.verified_count ?? result.verifiedCount,
+      "覆盖开始": larkDate(p.coverage_started_at ?? coverage.start), "覆盖结束": larkDate(p.coverage_completed_at ?? coverage.end),
+    });
+  }
+  if (record.kind === "items") {
+    const analysis = jsonObject(p.analysis_json); const dimensions = jsonObject(analysis.scoreDimensions);
+    const canonicalUrl = first(analysis.url) ?? first(p.canonical_url);
+    const exclusions = Array.isArray(analysis.exclusionReasons) ? analysis.exclusionReasons.map(String) : [];
+    return compact({
+      "发现渠道": analysis.discoveryChannel ?? p.discovery_channel, "去重键": p.canonical_identity,
+      "可行动分": dimensionValue(dimensions, "actionability"), "相关性分": dimensionValue(dimensions, "relevance"),
+      "URL 指纹": canonicalUrl ? digest(canonicalUrl) : undefined, "事件日期": larkDate(analysis.publishedAt ?? p.published_at),
+      "证据分": dimensionValue(dimensions, "evidence"), "淘汰原因": p.exclusion_reason ?? exclusions[0], "候选编号": p.candidate_id,
+      "时效分": dimensionValue(dimensions, "recency"), "发布日期": larkDate(analysis.publishedAt ?? p.published_at),
+      "关键短摘录": p.summary, "新颖分": dimensionValue(dimensions, "novelty"), "来源权威分": dimensionValue(dimensions, "authority"),
+      "交叉领域": analysis.crossDomains, "Obsidian 链接": p.obsidian_link,
+      "影响分": dimensionValue(dimensions, "impact"), "人工反馈": linked("feedback"), "重复于": linked("items"),
+    });
+  }
+  if (record.kind === "events") {
+    const detail = jsonObject(p.payload_json);
+    return compact({ "旧规则标识（迁移前）": detail.legacyRuleId ?? p.legacy_rule_id });
+  }
+  if (record.kind === "feedback") return compact({
+    "反馈前状态": p.before_status, "反馈后状态": p.after_status,
+  });
+  if (record.kind === "experiments") {
+    const sample = jsonObject(p.sample_json); const metrics = jsonObject(p.metrics_json);
+    return compact({
+      "基线指标": jsonText(metrics.baseline), "旧基线标识（迁移前）": p.legacy_baseline_id,
+      "样本窗口开始": larkDate(sample.windowStart), "旧候选标识（迁移前）": p.legacy_candidate_id,
+      "发布时间": larkDate(p.published_at), "样本窗口结束": larkDate(sample.windowEnd), "相关状态事件": linked("events"), "触发反馈": linked("feedback"),
+    });
+  }
+  if (record.kind === "captures") {
+    const raw = jsonObject(p.raw_json);
+    return compact({
+      "解析结果": jsonText(raw.parserResult ?? p.parser_result_json), "原始快照位置": raw.snapshotLocation ?? p.raw_snapshot_location,
+      "保留级别": raw.retentionLevel ?? p.retention_level,
+    });
+  }
+  if (record.kind === "rules") {
+    const thresholds = jsonObject(p.thresholds); const weights = jsonObject(p.weights);
+    return compact({
+      "入围阈值": thresholds.daily ?? p.daily_threshold, "人工复核阈值": thresholds.review ?? p.review_threshold,
+      "失效时间": larkDate(p.retired_at), "审批说明": p.approval_note, "生效时间": larkDate(p.effective_at),
+      "指标与权重": Object.keys(weights).length ? jsonText(weights) : undefined, "硬性门槛": jsonText(p.guardrails),
+      "单领域上限": p.per_domain_limit, "每日总上限": p.daily_limit, "来源实验": linked("experiments"), "状态事件": linked("events"), "运行批次": linked("runs"),
+    });
+  }
+  if (record.kind === "receipts") return compact({ "频率快照": p.scan_frequency });
+  return {};
+}
+
+export function larkFields(record: CanonicalControlRecord, links: Partial<Record<ControlEntityKind, Map<string, string>>> = {}): Record<string, unknown> {
+  return { ...managedLarkFields(record, links), ...compatibilityLarkFields(record, links) };
+}
+
+function larkLinkFields(record: CanonicalControlRecord, links: Partial<Record<ControlEntityKind, Map<string, string>>>, available?: Set<string>): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
-  for (const relation of LINK_LARK_FIELDS[record.kind] ?? []) {
+  const managed = LINK_LARK_FIELDS[record.kind] ?? [];
+  const compatibility = (LARK_COMPATIBILITY_LINK_FIELDS[record.kind] ?? []).filter((relation) => available?.has(relation.name));
+  for (const relation of [...managed, ...compatibility]) {
     const businessIds = record.links?.[relation.target];
     if (!businessIds?.length) continue;
     const resolved = businessIds.map((id) => links[relation.target]?.get(id));
@@ -511,12 +604,70 @@ export function provisionLarkControlPlane(
   return { tables, createdTables, createdFields, updatedFields };
 }
 
+export interface LarkTableAudit {
+  kind: ControlEntityKind;
+  records: number;
+  fields: number;
+  missingManagedFields: string[];
+  unrecognizedFields: string[];
+  typeMismatches: string[];
+  fullyBlankFields: Array<{ name: string; blank: number }>;
+  partiallyBlankFields: Array<{ name: string; blank: number; filled: number }>;
+  requiredBlankFields: Array<{ name: string; blank: number; filled: number }>;
+}
+
+function blankLarkValue(value: unknown): boolean {
+  return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+/** Read-only production inventory and row-completeness audit. */
+export function auditLarkControlPlane(
+  config: NonNullable<EffectiveConfig["controlPlane"]["lark"]>,
+  runner: LarkRunner = systemLarkRunner(config.profile),
+): { ready: boolean; manifestVersion: string; tables: LarkTableAudit[] } {
+  const client = new LarkCliClient(config.baseToken, config.identity, runner);
+  const tables: LarkTableAudit[] = [];
+  for (const kind of Object.keys(LARK_FIELD_MANIFEST) as ControlEntityKind[]) {
+    const actualFields = client.fields(config.tables[kind]);
+    const actualByName = new Map(actualFields.map((field) => [field.name, String(field.type)]));
+    const inventory = new Map(LARK_FIELD_INVENTORY[kind].map((field) => [field.name, field.type]));
+    const rows = client.records(config.tables[kind], actualFields.map((field) => field.name));
+    const blankCounts = new Map(actualFields.map((field) => [field.name, rows.reduce((count, row) => count + Number(blankLarkValue(row.fields[field.name])), 0)]));
+    const blankFields = actualFields.flatMap((field) => {
+      const blank = blankCounts.get(field.name) ?? 0; const filled = rows.length - blank;
+      return blank ? [{ name: field.name, blank, filled }] : [];
+    });
+    const required = new Set(LARK_ROW_COMPLETENESS_FIELDS[kind]);
+    tables.push({
+      kind, records: rows.length, fields: actualFields.length,
+      missingManagedFields: LARK_FIELD_MANIFEST[kind].map((field) => field.name).filter((name) => !actualByName.has(name)),
+      unrecognizedFields: actualFields.map((field) => field.name).filter((name) => !inventory.has(name)),
+      typeMismatches: actualFields.flatMap((field) => inventory.has(field.name) && inventory.get(field.name) !== String(field.type) ? [`${field.name}:actual=${field.type},expected=${inventory.get(field.name)}`] : []),
+      fullyBlankFields: blankFields.filter((field) => field.filled === 0).map(({ name, blank }) => ({ name, blank })),
+      partiallyBlankFields: blankFields.filter((field) => field.filled > 0),
+      requiredBlankFields: blankFields.filter((field) => required.has(field.name)),
+    });
+  }
+  return { ready: tables.every((table) => !table.missingManagedFields.length && !table.unrecognizedFields.length && !table.typeMismatches.length && !table.requiredBlankFields.length),
+    manifestVersion: LARK_FIELD_MANIFEST_VERSION, tables };
+}
+
 export class LarkControlPlaneStore implements ControlPlaneStore {
   readonly driver = "lark" as const;
   private readonly client: LarkCliClient;
 
   constructor(private readonly config: NonNullable<EffectiveConfig["controlPlane"]["lark"]>, runner?: LarkRunner) {
     this.client = new LarkCliClient(config.baseToken, config.identity, runner ?? systemLarkRunner(config.profile));
+  }
+
+  businessIds(): Record<ControlEntityKind, string[]> {
+    return Object.fromEntries((Object.keys(LARK_ID_FIELDS) as ControlEntityKind[]).map((kind) => {
+      const idField = LARK_ID_FIELDS[kind];
+      const ids = this.client.records(this.config.tables[kind], [idField]).flatMap((row) => {
+        const id = first(row.fields[idField]); return id ? [id] : [];
+      });
+      return [kind, ids];
+    })) as Record<ControlEntityKind, string[]>;
   }
 
   async doctor(): Promise<ControlPlaneCheck[]> {
@@ -529,7 +680,13 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
       try {
         const fields = this.client.fields(this.config.tables[kind]);
         const actual = new Set(fields.map((field) => field.name));
+        const inventory = new Map(LARK_FIELD_INVENTORY[kind].map((field) => [field.name, field.type]));
         const missing = REQUIRED_LARK_FIELDS[kind].filter((field) => !actual.has(field));
+        const unrecognized = fields.filter((field) => !inventory.has(field.name)).map((field) => `${field.name}:unrecognized-${field.type}`);
+        const inventoryTypeMismatches = fields.flatMap((field) => {
+          const expected = inventory.get(field.name);
+          return expected && expected !== field.type ? [`${field.name}:type=${field.type},inventory=${expected}`] : [];
+        });
         const invalidLinks = (LINK_LARK_FIELDS[kind] ?? []).flatMap((link) => {
           const field = fields.find((entry) => entry.name === link.name);
           return !field ? [`${link.name}:missing`] : field.type !== "link" ? [`${link.name}:type=${field.type}`]
@@ -544,8 +701,8 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
           const missingOptions = expected.options.filter((option) => !actualOptions.has(option.name)).map((option) => option.name);
           return missingOptions.length ? [`${expected.name}:missing-options=${missingOptions.join("|")}`] : [];
         });
-        const problems = [...missing.map((field) => `${field}:missing`), ...invalidScalars, ...invalidLinks];
-        checks.push({ name: `lark-table:${kind}`, ok: problems.length === 0, detail: problems.length ? `invalid fields: ${problems.join(", ")}` : `${actual.size} fields; ${LARK_FIELD_MANIFEST_VERSION} scalar, option and link contract is present` });
+        const problems = [...missing.map((field) => `${field}:missing`), ...invalidScalars, ...invalidLinks, ...unrecognized, ...inventoryTypeMismatches];
+        checks.push({ name: `lark-table:${kind}`, ok: problems.length === 0, detail: problems.length ? `invalid fields: ${problems.join(", ")}` : `${actual.size} fields; ${LARK_FIELD_MANIFEST_VERSION} managed contract present and every production field is inventoried` });
         const count = this.client.countRecords(this.config.tables[kind], LARK_ID_FIELDS[kind]);
         const limit = this.config.maximumRecordsPerTable ?? 2000;
         const remaining = limit - count;
@@ -618,7 +775,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     return { revision: digest(records), sources, rules, feedback, records };
   }
 
-  async plan(records: CanonicalControlRecord[]): Promise<SyncPlan> {
+  async plan(records: CanonicalControlRecord[], options: { includeCompatibility?: boolean } = {}): Promise<SyncPlan> {
     const creates: CanonicalControlRecord[] = []; const updates: CanonicalControlRecord[] = []; const unchanged: CanonicalControlRecord[] = [];
     const existingCounts = new Map<ControlEntityKind, number>();
     const linkKinds = [...new Set(records.filter((record) => record.links && Object.values(record.links).some((ids) => ids?.length)).map((record) => record.kind))];
@@ -636,11 +793,19 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     for (const kind of [...new Set(records.map((record) => record.kind))]) {
       const idField = LARK_ID_FIELDS[kind];
       const recordsForKind = records.filter((record) => record.kind === kind);
-      const existing = new Map(this.client.recordsMatchingAny(this.config.tables[kind], idField, recordsForKind.map((record) => record.id), REQUIRED_LARK_FIELDS[kind]).map((row) => [first(row.fields[idField]), row]));
+      const available = options.includeCompatibility ? new Set(this.client.fields(this.config.tables[kind]).map((field) => field.name)) : new Set<string>();
+      const readable = options.includeCompatibility
+        ? [...new Set([...REQUIRED_LARK_FIELDS[kind], ...LARK_FIELD_INVENTORY[kind].map((field) => field.name)])].filter((name) => available.has(name))
+        : REQUIRED_LARK_FIELDS[kind];
+      const requestedIds = new Set(recordsForKind.map((record) => record.id));
+      const rows = options.includeCompatibility
+        ? this.client.records(this.config.tables[kind], readable).filter((row) => requestedIds.has(first(row.fields[idField]) ?? ""))
+        : this.client.recordsMatchingAny(this.config.tables[kind], idField, [...requestedIds], readable);
+      const existing = new Map(rows.map((row) => [first(row.fields[idField]), row]));
       knownTargets[kind] = new Map([...existing.entries()].flatMap(([id, row]) => id ? [[id, row.recordId] as const] : []));
       for (const record of recordsForKind) {
         const current = existing.get(record.id); const storeRecordId = current?.recordId;
-        const expected = larkFields(record);
+        const expected = writableLarkFields(kind, larkFields(record), available);
         const expectedForComparison = comparisonFields(record, expected);
         const matches = current ? fieldsMatch(current.fields, expectedForComparison) : false;
         if (storeRecordId && matches) unchanged.push({ ...record, storeRecordId });
@@ -675,8 +840,10 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     if (plan.driver !== this.driver) throw new Error(`Cannot apply ${plan.driver} plan through Lark`);
     if (plan.conflicts.length) throw new Error("Cannot apply a sync plan with unresolved conflicts");
     const plannedRecords = [...plan.creates, ...plan.updates, ...plan.unchanged];
+    const schemaByKind = new Map<ControlEntityKind, Map<string, ReturnType<LarkCliClient["fields"]>[number]>>();
     for (const kind of [...new Set(plannedRecords.map((record) => record.kind))]) {
       const schema = new Map(this.client.fields(this.config.tables[kind]).map((field) => [field.name, field]));
+      schemaByKind.set(kind, schema);
       for (const record of plannedRecords.filter((entry) => entry.kind === kind)) {
         for (const [name, value] of Object.entries(larkFields(record))) {
           const field = schema.get(name);
@@ -709,7 +876,8 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     createKinds: for (const kind of [...new Set(plan.creates.map((record) => record.kind))]) {
       for (const batch of chunks(plan.creates.filter((record) => record.kind === kind))) {
         try {
-          const response = this.client.batchCreate(this.config.tables[kind], batch.map((record) => writableLarkFields(kind, larkFields(record))));
+          const available = new Set(schemaByKind.get(kind)!.keys());
+          const response = this.client.batchCreate(this.config.tables[kind], batch.map((record) => writableLarkFields(kind, larkFields(record), available)));
           const object = response && typeof response === "object" ? response as Record<string, unknown> : {};
           const ids = Array.isArray(object.record_id_list) ? object.record_id_list.filter((id): id is string => typeof id === "string" && Boolean(id))
             : Array.isArray(object.recordIdList) ? object.recordIdList.filter((id): id is string => typeof id === "string" && Boolean(id)) : [];
@@ -728,7 +896,8 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     updateKinds: for (const kind of scalarWriteFailed ? [] : [...new Set(plan.updates.map((record) => record.kind))]) {
       for (const batch of chunks(plan.updates.filter((record) => record.kind === kind))) {
         try {
-          this.client.batchUpdate(this.config.tables[kind], Object.fromEntries(batch.map((record) => [record.storeRecordId!, writableLarkFields(kind, larkFields(record))])));
+          const available = new Set(schemaByKind.get(kind)!.keys());
+          this.client.batchUpdate(this.config.tables[kind], Object.fromEntries(batch.map((record) => [record.storeRecordId!, writableLarkFields(kind, larkFields(record), available)])));
           for (const record of batch) completed.set(key(record), record);
         } catch (error) {
           const detail = `record update failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -748,7 +917,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     const linkRecords = [...completed.values()].filter((record) => record.storeRecordId && record.links && Object.values(record.links).some((ids) => ids?.length));
     for (const kind of [...new Set(linkRecords.map((record) => record.kind))]) {
       const prepared = linkRecords.filter((record) => record.kind === kind).flatMap((record) => {
-        try { return [{ record, fields: larkLinkFields(record, index) }]; }
+        try { return [{ record, fields: larkLinkFields(record, index, new Set(schemaByKind.get(kind)!.keys())) }]; }
         catch (error) {
           failed.push({ kind: record.kind, id: record.id, detail: `link update failed: ${error instanceof Error ? error.message : String(error)}` });
           return [];
@@ -767,7 +936,8 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
     for (const kind of [...new Set([...completed.values()].map((record) => record.kind))]) {
       const records = [...completed.values()].filter((record) => record.kind === kind && !failed.some((item) => item.kind === record.kind && item.id === record.id));
       if (!records.length) continue;
-      const expectedById = new Map(records.map((record) => [record.id, comparisonFields(record, larkFields(record, index))]));
+      const available = new Set(schemaByKind.get(kind)!.keys());
+      const expectedById = new Map(records.map((record) => [record.id, comparisonFields(record, writableLarkFields(kind, larkFields(record, index), available))]));
       const fields = [...new Set([LARK_ID_FIELDS[kind], ...records.flatMap((record) => Object.keys(expectedById.get(record.id)!))])];
       let pending = records;
       let lastError: unknown;

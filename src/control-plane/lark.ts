@@ -25,6 +25,11 @@ function list(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : typeof value === "string" ? [value] : [];
 }
 
+function larkFrequency(value: unknown): string | undefined {
+  const normalized = first(value);
+  return normalized === "daily" ? "每日" : normalized === "weekly" ? "每周" : normalized === "on-demand" ? "按需" : normalized;
+}
+
 function linkedRecordIds(value: unknown): string[] {
   return Array.isArray(value) ? value.flatMap((entry) => entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string" ? [(entry as { id: string }).id] : []) : [];
 }
@@ -512,7 +517,7 @@ function compatibilityLarkFields(record: CanonicalControlRecord, links: Partial<
       "单领域上限": p.per_domain_limit, "每日总上限": p.daily_limit, "来源实验": linked("experiments"), "状态事件": linked("events"), "运行批次": linked("runs"),
     });
   }
-  if (record.kind === "receipts") return compact({ "频率快照": p.scan_frequency });
+  if (record.kind === "receipts") return compact({ "频率快照": larkFrequency(p.scan_frequency) });
   return {};
 }
 

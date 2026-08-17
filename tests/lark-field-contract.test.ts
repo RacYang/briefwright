@@ -77,5 +77,7 @@ describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
     expect(larkFields({ kind: "sources", id: "SRC-1", payload: { id: "SRC-1", title: "Source", enabled: true, sourceType: "website", evidenceTier: "primary", priority: 90,
       connector: { type: "webpage", config: { url: "https://example.com" } }, scans_30d: 10, updates_30d: 4, selections_30d: 2 } }))
       .toMatchObject({ 近30天扫描数: 10, 近30天有效更新数: 4, 近30天入围数: 2, 近30天更新率: 0.4, 近30天入围率: 0.2, 权威分: 90 });
+    expect(larkFields({ kind: "receipts", id: "SCAN-2", payload: { scan_frequency: "weekly" } }))
+      .toMatchObject({ 频率快照: "每周" });
   });
 });

@@ -216,6 +216,7 @@ function compact(fields: Record<string, unknown>): Record<string, unknown> {
 
 function comparable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(comparable).sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b)));
+  if (typeof value === "number" && Number.isFinite(value)) return Number(value.toPrecision(12));
   if (typeof value === "string") {
     const linked = /^\[[^\]]*\]\((https:\/\/[^)]+)\)$/.exec(value.trim()); if (linked?.[1]) return linked[1];
     const date = isoDate(value); if (date && /^\d{4}-\d{2}-\d{2}[ T]/.test(value)) return date;

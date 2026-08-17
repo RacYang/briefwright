@@ -159,6 +159,25 @@ describe("Lark control plane", () => {
     expect((await store.plan([record], { includeCompatibility: true })).updates).toHaveLength(1);
   });
 
+  it("accepts Feishu numeric precision normalization during compatibility readback", async () => {
+    const record: CanonicalControlRecord = { kind: "sources", id: "SRC-PRECISION", payload: { id: "SRC-PRECISION", title: "Precision", enabled: true,
+      sourceType: "website", evidenceTier: "primary", priority: 90, scans_30d: 3, updates_30d: 1, selections_30d: 0,
+      connector: { type: "webpage", config: { url: "https://example.com" } } } };
+    const expected = larkFields(record);
+    const runner: LarkRunner = (args) => {
+      if (args.includes("+field-list")) return { fields: LARK_FIELD_INVENTORY.sources.map((field, index) => ({ ...field, id: `fld_${index}` })) };
+      if (args.includes("+record-list")) {
+        const requested = args.flatMap((arg, index) => arg === "--field-id" ? [args[index + 1]!] : []);
+        return { record_id_list: ["rec_source"], fields: requested,
+          data: [requested.map((field) => field === "近30天更新率" ? 0.333333333333333 : expected[field] ?? null)], has_more: false };
+      }
+      throw new Error(`unexpected call ${args.join(" ")}`);
+    };
+    const plan = await new LarkControlPlaneStore({ baseToken: "base", identity: "user", tables }, runner).plan([record], { includeCompatibility: true });
+    expect(plan.unchanged).toHaveLength(1);
+    expect(plan.updates).toHaveLength(0);
+  });
+
   it("plans and emits explicit field clears when a browser source becomes a direct webpage", async () => {
     const runner: LarkRunner = (args) => {
       if (!args.includes("+record-list")) throw new Error(`unexpected call ${args.join(" ")}`);

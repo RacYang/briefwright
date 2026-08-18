@@ -372,6 +372,9 @@ larkCommand.command("backfill")
       return;
     }
     console.log(`${result.applied ? "Applied" : "Plan"}: ${result.updates} existing rows updated; ${result.localOnlySkipped} local-only rows skipped.`);
+    if (result.remoteSourcesWithHistoricalEvidence.length) {
+      console.log(`Protected ${result.remoteSourcesWithHistoricalEvidence.length} remote source(s) with historical receipt snapshots: ${result.remoteSourcesWithHistoricalEvidence.join(", ")}. Do not classify them as orphaned records.`);
+    }
     if (!result.applied && result.updates) console.log("No Base changes made. Re-run with --apply --yes after reviewing this exact plan.");
     if (!ok) process.exitCode = 1;
   });

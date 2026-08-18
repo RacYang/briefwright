@@ -13,6 +13,33 @@ import { projectStatus } from "./status.js";
 
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 
+export function historicalSourceEvidence(records: Iterable<CanonicalControlRecord>): Set<string> {
+  const sourceIds = new Set<string>();
+  for (const record of records) {
+    if (record.kind !== "receipts" || typeof record.payload.source_snapshot_json !== "string") continue;
+    try {
+      const snapshot = JSON.parse(record.payload.source_snapshot_json) as Record<string, unknown>;
+      const sourceId = typeof snapshot.id === "string" ? snapshot.id : undefined;
+      if (!sourceId) continue;
+      const payloadSourceId = typeof record.payload.source_id === "string" ? record.payload.source_id : undefined;
+      const linkedSourceIds = record.links?.sources ?? [];
+      if (payloadSourceId && payloadSourceId !== sourceId) continue;
+      if (linkedSourceIds.length && !linkedSourceIds.includes(sourceId)) continue;
+      sourceIds.add(sourceId);
+    } catch { /* invalid historical snapshots are not deletion evidence */ }
+  }
+  return sourceIds;
+}
+
+export function remoteWithoutLocalEvidenceByKind(
+  records: ReadonlyMap<string, CanonicalControlRecord>,
+  remoteIds: Record<ControlEntityKind, string[]>,
+): Record<ControlEntityKind, number> {
+  const historicalSourceIds = historicalSourceEvidence(records.values());
+  return Object.fromEntries((Object.keys(remoteIds) as ControlEntityKind[]).map((kind) => [kind, remoteIds[kind].filter((id) =>
+    !records.has(`${kind}\n${id}`) && !(kind === "sources" && historicalSourceIds.has(id))).length])) as Record<ControlEntityKind, number>;
+}
+
 export async function importLarkSnapshot(configPath: string) {
   const config = await loadEffectiveConfig(configPath);
   if (config.controlPlane.driver !== "lark") throw new Error("import lark requires a configured Lark process store");
@@ -87,7 +114,11 @@ export async function backfillLarkProject(
     const countByKind = (values: CanonicalControlRecord[]) => Object.fromEntries((Object.keys(config.controlPlane.lark!.tables) as ControlEntityKind[]).map((kind) => [kind, values.filter((record) => record.kind === kind).length]));
     const migrationPlan: SyncPlan = { ...plan, creates: [], unchanged: [], conflicts: [] };
     const localOnly = [...records.values()].filter((record) => !remoteSets[record.kind].has(record.id));
-    const remoteWithoutLocalByKind = Object.fromEntries((Object.keys(remoteIds) as ControlEntityKind[]).map((kind) => [kind, remoteIds[kind].filter((id) => !records.has(`${kind}\n${id}`)).length]));
+    const historicalSourceIds = historicalSourceEvidence(records.values());
+    const remoteSourcesWithHistoricalEvidence = remoteIds.sources
+      .filter((id) => !records.has(`sources\n${id}`) && historicalSourceIds.has(id))
+      .sort();
+    const remoteWithoutLocalByKind = remoteWithoutLocalEvidenceByKind(records, remoteIds);
     const summary = {
       localEvidenceRecords: records.size,
       existingRemoteRecords: eligible.length,
@@ -96,6 +127,7 @@ export async function backfillLarkProject(
       localOnlySkipped: localOnly.length,
       localOnlySkippedByKind: countByKind(localOnly),
       remoteWithoutLocalByKind,
+      remoteSourcesWithHistoricalEvidence,
       updateIds: plan.updates.map((record) => `${record.kind}:${record.id}`),
       digest: plan.digest,
     };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assertBackfillAuthorization } from "../src/commands/import-sync.js";
+import { assertBackfillAuthorization, historicalSourceEvidence, remoteWithoutLocalEvidenceByKind } from "../src/commands/import-sync.js";
 import { LARK_COMPATIBILITY_FIELDS, LARK_FIELD_INVENTORY, LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION } from "../src/control-plane/lark-field-manifest.js";
 import { larkFields } from "../src/control-plane/lark.js";
 import type { ControlEntityKind } from "../src/control-plane/types.js";
@@ -34,6 +34,42 @@ const productionFieldCounts: Record<ControlEntityKind, number> = {
 };
 
 describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
+  it("treats a receipt source snapshot as local evidence before cleanup classification", () => {
+    const records = [
+      {
+        kind: "receipts" as const,
+        id: "RUN-1:SRC-HISTORICAL",
+        payload: {
+          source_id: "SRC-HISTORICAL",
+          source_snapshot_json: JSON.stringify({ id: "SRC-HISTORICAL", title: "Historical source" }),
+        },
+        links: { sources: ["SRC-HISTORICAL"] },
+      },
+      {
+        kind: "receipts" as const,
+        id: "RUN-2:SRC-MISMATCH",
+        payload: {
+          source_id: "SRC-MISMATCH",
+          source_snapshot_json: JSON.stringify({ id: "SRC-OTHER", title: "Wrong source" }),
+        },
+        links: { sources: ["SRC-MISMATCH"] },
+      },
+      {
+        kind: "receipts" as const,
+        id: "RUN-3:SRC-BROKEN",
+        payload: { source_id: "SRC-BROKEN", source_snapshot_json: "not-json" },
+        links: { sources: ["SRC-BROKEN"] },
+      },
+    ];
+
+    expect([...historicalSourceEvidence(records)]).toEqual(["SRC-HISTORICAL"]);
+    const recordMap = new Map(records.map((record) => [`${record.kind}\n${record.id}`, record]));
+    const remoteIds = Object.fromEntries([
+      "sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts",
+    ].map((kind) => [kind, kind === "sources" ? ["SRC-HISTORICAL", "SRC-UNKNOWN"] : []])) as Record<ControlEntityKind, string[]>;
+    expect(remoteWithoutLocalEvidenceByKind(recordMap, remoteIds)).toMatchObject({ sources: 1, receipts: 0 });
+  });
+
   it("binds every applied backfill to the exact reviewed digest and update count", () => {
     expect(() => assertBackfillAuthorization({ digest: "abc", updates: 1549 }, "abc", 1549)).not.toThrow();
     expect(() => assertBackfillAuthorization({ digest: "changed", updates: 1549 }, "abc", 1549)).toThrow(/digest changed/);

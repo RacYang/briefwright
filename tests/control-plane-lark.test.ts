@@ -160,6 +160,78 @@ describe("Lark control plane", () => {
     expect((await store.plan([record], { includeCompatibility: true })).updates).toHaveLength(1);
   });
 
+  it("maps run completion counts and plans a missing parent-run relationship", async () => {
+    const parent: CanonicalControlRecord = { kind: "runs", id: "RUN-PARENT", payload: { status: "success", current_stage: "complete" } };
+    const child: CanonicalControlRecord = { kind: "runs", id: "RUN-CHILD", payload: {
+      status: "success", current_stage: "complete", result_json: JSON.stringify({ completionReport: { discovered: 12, verified: 7 } }),
+    }, links: { runs: [parent.id] } };
+    expect(larkFields(child)).toMatchObject({ "发现数": 12, "核验数": 7 });
+
+    const rows = [parent, child].map((record, index) => ({ record, recordId: `rec_${index}`, expected: larkFields(record) }));
+    const runner: LarkRunner = (args) => {
+      if (args.includes("+field-list")) return { fields: LARK_FIELD_INVENTORY.runs.map((field, index) => ({ ...field, id: `fld_${index}`,
+        ...(field.name === "父运行批次" ? { link_table: tables.runs } : {}) })) };
+      if (args.includes("+record-list")) {
+        const requested = args.flatMap((arg, index) => arg === "--field-id" ? [args[index + 1]!] : []);
+        return { record_id_list: rows.map((row) => row.recordId), fields: requested,
+          data: rows.map(({ record, expected }) => requested.map((field) => field === "Run ID" ? record.id : field === "父运行批次" ? null : expected[field] ?? null)), has_more: false };
+      }
+      throw new Error(`unexpected call ${args.join(" ")}`);
+    };
+    const plan = await new LarkControlPlaneStore({ baseToken: "base", identity: "user", tables }, runner)
+      .plan([parent, child], { includeCompatibility: true });
+    expect(plan.updates.map((record) => record.id)).toEqual([child.id]);
+    expect(plan.unchanged.map((record) => record.id)).toEqual([parent.id]);
+  });
+
+  it("reproduces the seven production-shaped scalar and relationship repairs", async () => {
+    const runCounts = [
+      ["RUN-20260814-DAILY", 330, 200],
+      ["RUN-20260814-DAILY-R01", 0, 132],
+      ["RUN-20260815-DAILY", 181, 181],
+      ["RUN-20260816-DAILY", 0, 0],
+      ["RUN-20260817-DAILY", 120, 0],
+    ] as const;
+    const records: CanonicalControlRecord[] = [
+      ...runCounts.map(([id, discovered, verified]) => ({ kind: "runs" as const, id, payload: {
+        status: "success", current_stage: "complete", result_json: JSON.stringify({ completionReport: { discovered, verified } }),
+      }, ...(id.endsWith("R01") ? { links: { runs: ["RUN-20260814-DAILY"] } } : {}) })),
+      ...["AI-F54C6FA5E6DF", "AI-9EC46C909903"].map((id) => ({ kind: "items" as const, id, payload: {
+        title: id, disposition: "daily", canonical_url: `https://example.com/${id}`,
+      }, links: { sources: ["SRC-REUTERS-AI"] } })),
+    ];
+    const rows = new Map(records.map((record, index) => [record.id, { recordId: `rec_${index}`, record }]));
+    const runner: LarkRunner = (args) => {
+      const table = args[args.indexOf("--table-id") + 1]!;
+      if (args.includes("+field-list")) {
+        const kind = Object.entries(tables).find(([, value]) => value === table)![0] as keyof typeof LARK_FIELD_INVENTORY;
+        return { fields: LARK_FIELD_INVENTORY[kind].map((field, index) => {
+          const target = LARK_FIELD_MANIFEST[kind].find((entry) => entry.name === field.name)?.target;
+          return { ...field, id: `fld_${index}`, ...(target ? { link_table: tables[target] } : {}) };
+        }) };
+      }
+      if (args.includes("+record-list")) {
+        const requested = args.flatMap((arg, index) => arg === "--field-id" ? [args[index + 1]!] : []);
+        if (table === tables.sources) return { record_id_list: ["rec_reuters"], fields: requested,
+          data: [requested.map((field) => field === "Source ID" ? "SRC-REUTERS-AI" : null)], has_more: false };
+        const kind = table === tables.runs ? "runs" : table === tables.items ? "items" : undefined;
+        const selected = [...rows.values()].filter(({ record }) => record.kind === kind);
+        return { record_id_list: selected.map((row) => row.recordId), fields: requested, data: selected.map(({ record }) => {
+          const expected = larkFields(record);
+          return requested.map((field) => field === "发现数" || field === "核验数" || field === "父运行批次" || field === "数据源"
+            ? null : expected[field] ?? null);
+        }), has_more: false };
+      }
+      throw new Error(`unexpected call ${args.join(" ")}`);
+    };
+    const plan = await new LarkControlPlaneStore({ baseToken: "base", identity: "user", tables }, runner)
+      .plan(records, { includeCompatibility: true });
+    expect(plan.creates).toEqual([]);
+    expect(plan.updates.map((record) => `${record.kind}:${record.id}`).sort()).toEqual(records.map((record) => `${record.kind}:${record.id}`).sort());
+    expect(plan.updates).toHaveLength(7);
+    expect(plan.unchanged).toEqual([]);
+  });
+
   it("accepts Feishu numeric precision normalization during compatibility readback", async () => {
     const record: CanonicalControlRecord = { kind: "sources", id: "SRC-PRECISION", payload: { id: "SRC-PRECISION", title: "Precision", enabled: true,
       sourceType: "website", evidenceTier: "primary", priority: 90, scans_30d: 3, updates_30d: 1, selections_30d: 0,

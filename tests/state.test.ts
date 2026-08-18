@@ -11,6 +11,19 @@ import { createFixtureRun } from "../src/core/fixture.js";
 import { SqliteStateStore } from "../src/state/sqlite.js";
 
 describe("SQLite state", () => {
+  it("selects formal and retry evidence while excluding preview runs from backfill", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-formal-evidence-"));
+    const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"), root);
+    try {
+      store.database.prepare("INSERT INTO config_snapshots(digest,config_json,created_at) VALUES (?,?,?)").run("fixture", "{}", "2026-08-12T00:00:00Z");
+      const insert = store.database.prepare("INSERT INTO runs(run_id,generated_at,mode,config_digest,status,result_json,run_kind) VALUES (?,?,?,?,?,?,?)");
+      insert.run("PREVIEW-EDITORIAL-1", "2026-08-12T00:00:00Z", "live", "fixture", "success", "{}", "preview");
+      insert.run("RUN-20260812-DAILY", "2026-08-12T01:00:00Z", "live", "fixture", "failed", "{}", "formal");
+      insert.run("RUN-20260812-DAILY-R01", "2026-08-12T02:00:00Z", "live", "fixture", "partial", "{}", "formal-retry");
+      expect(store.formalRunIds()).toEqual(["RUN-20260812-DAILY", "RUN-20260812-DAILY-R01"]);
+    } finally { store.close(); }
+  });
+
   it("never exports a reused capture link to an unpublished zombie origin run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-capture-origin-"));
     const intent: BriefingIntent = { version: 2, name: "Capture origin", preset: "ai-daily", interests: ["AI"], schedule: "manual", output: "markdown", outputDirectory: "briefs", ai: "qwen" };

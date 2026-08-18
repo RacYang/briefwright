@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assertBackfillAuthorization, historicalSourceEvidence, remoteWithoutLocalEvidenceByKind } from "../src/commands/import-sync.js";
+import { assertBackfillAcknowledged, assertBackfillAuthorization, assertBackfillPostApplyClean, filterCanonicalLinksToRemote, historicalSourceEvidence, mergeCanonicalControlRecords, prepareLarkBackfillEvidence, remoteWithoutLocalEvidenceByKind } from "../src/commands/import-sync.js";
 import { LARK_COMPATIBILITY_FIELDS, LARK_FIELD_INVENTORY, LARK_FIELD_MANIFEST, LARK_FIELD_MANIFEST_VERSION } from "../src/control-plane/lark-field-manifest.js";
 import { larkFields } from "../src/control-plane/lark.js";
 import type { ControlEntityKind } from "../src/control-plane/types.js";
@@ -34,6 +34,48 @@ const productionFieldCounts: Record<ControlEntityKind, number> = {
 };
 
 describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
+  it("merges repeated formal evidence without erasing earlier relationships", () => {
+    const first = { kind: "captures" as const, id: "CAP-1", payload: { title: "first" }, links: { runs: ["RUN-1"], sources: ["SRC-1"] } };
+    const latest = { kind: "captures" as const, id: "CAP-1", payload: { title: "latest" }, links: { runs: ["RUN-2"], sources: ["SRC-1"] } };
+    expect(mergeCanonicalControlRecords(first, latest)).toEqual({
+      kind: "captures", id: "CAP-1", payload: { title: "latest" }, links: { runs: ["RUN-1", "RUN-2"], sources: ["SRC-1"] },
+    });
+  });
+
+  it("retains surviving relationships while reporting targets removed by production slimming", () => {
+    const remoteSets = Object.fromEntries([
+      "sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts",
+    ].map((kind) => [kind, new Set(kind === "runs" ? ["RUN-NEW"] : kind === "sources" ? ["SRC-1"] : [])])) as Record<ControlEntityKind, Set<string>>;
+    const filtered = filterCanonicalLinksToRemote({ kind: "captures", id: "CAP-1", payload: {}, links: {
+      runs: ["RUN-DELETED", "RUN-NEW"], sources: ["SRC-1"],
+    } }, remoteSets);
+    expect(filtered.record.links).toEqual({ runs: ["RUN-NEW"], sources: ["SRC-1"] });
+    expect(filtered.skipped).toEqual([{ relation: "runs", id: "RUN-DELETED" }]);
+  });
+
+  it("reproduces the production-shaped retry topology from formal evidence only", () => {
+    const kinds = ["sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts"] as ControlEntityKind[];
+    const remoteIds = Object.fromEntries(kinds.map((kind) => [kind, kind === "sources" ? ["SRC-REUTERS-AI"]
+      : kind === "runs" ? ["RUN-20260814-DAILY-R01"] : kind === "captures" ? ["CAP-REUSED"] : []])) as Record<ControlEntityKind, string[]>;
+    const evidence = prepareLarkBackfillEvidence([
+      [{ kind: "captures", id: "CAP-REUSED", payload: { title: "old origin" }, links: { runs: ["RUN-20260812-DAILY-R06"], sources: ["SRC-REUTERS-AI"] } }],
+      [
+        { kind: "sources", id: "SRC-REUTERS-AI", payload: { title: "Reuters AI" } },
+        { kind: "runs", id: "RUN-20260814-DAILY-R01", payload: { status: "partial" } },
+        { kind: "captures", id: "CAP-REUSED", payload: { title: "surviving retry" }, links: { runs: ["RUN-20260814-DAILY-R01"], sources: ["SRC-REUTERS-AI"] } },
+      ],
+    ], remoteIds);
+
+    expect(evidence.eligible.find((record) => record.kind === "captures")).toEqual({
+      kind: "captures", id: "CAP-REUSED", payload: { title: "surviving retry" },
+      links: { runs: ["RUN-20260814-DAILY-R01"], sources: ["SRC-REUTERS-AI"] },
+    });
+    expect(evidence.skippedMissingRemoteLinkTargets).toEqual([
+      "captures:CAP-REUSED->runs:RUN-20260812-DAILY-R06",
+    ]);
+    expect(evidence.remoteWithoutLocalByKind).toEqual(Object.fromEntries(kinds.map((kind) => [kind, 0])));
+  });
+
   it("treats a receipt source snapshot as local evidence before cleanup classification", () => {
     const records = [
       {
@@ -75,6 +117,15 @@ describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
     expect(() => assertBackfillAuthorization({ digest: "changed", updates: 1549 }, "abc", 1549)).toThrow(/digest changed/);
     expect(() => assertBackfillAuthorization({ digest: "abc", updates: 1550 }, "abc", 1549)).toThrow(/update count changed/);
     expect(() => assertBackfillAuthorization({ digest: "abc", updates: 1549 })).toThrow(/requires --expect-digest and --expect-updates/);
+  });
+
+  it("rejects an unacknowledged write and a nonzero post-apply plan", () => {
+    expect(() => assertBackfillAcknowledged({ driver: "lark", created: 0, updated: 1, unchanged: 0, failed: [], digest: "abc", acknowledged: true })).not.toThrow();
+    expect(() => assertBackfillAcknowledged({ driver: "lark", created: 0, updated: 0, unchanged: 0,
+      failed: [{ kind: "runs", id: "RUN-1", detail: "readback mismatch" }], digest: "abc", acknowledged: false })).toThrow(/readback mismatch/);
+    const clean = { driver: "lark" as const, creates: [], updates: [], unchanged: [], conflicts: [], digest: "abc" };
+    expect(() => assertBackfillPostApplyClean(clean)).not.toThrow();
+    expect(() => assertBackfillPostApplyClean({ ...clean, updates: [{ kind: "runs", id: "RUN-1", payload: {} }] })).toThrow(/updates=1/);
   });
 
   it("contains every field in the accepted nine-table checklist exactly once", () => {

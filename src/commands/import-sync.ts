@@ -6,7 +6,7 @@ import { loadEffectiveConfig, canonicalJson } from "../config/load.js";
 import { writeArtifactAtomic } from "../outputs/write.js";
 import { controlPlaneFor, hydrateControlPlaneContext } from "../control-plane/registry.js";
 import { auditLarkControlPlane, LarkControlPlaneStore, provisionLarkControlPlane } from "../control-plane/lark.js";
-import type { CanonicalControlRecord, ControlEntityKind, SyncPlan } from "../control-plane/types.js";
+import type { CanonicalControlRecord, ControlEntityKind, SyncPlan, SyncResult } from "../control-plane/types.js";
 import { validateControlRecords } from "../control-plane/contract.js";
 import { SqliteStateStore } from "../state/sqlite.js";
 import { projectStatus } from "./status.js";
@@ -40,6 +40,73 @@ export function remoteWithoutLocalEvidenceByKind(
     !records.has(`${kind}\n${id}`) && !(kind === "sources" && historicalSourceIds.has(id))).length])) as Record<ControlEntityKind, number>;
 }
 
+export function mergeCanonicalControlRecords(existing: CanonicalControlRecord, incoming: CanonicalControlRecord): CanonicalControlRecord {
+  if (existing.kind !== incoming.kind || existing.id !== incoming.id) throw new Error("Cannot merge different canonical control records");
+  const linkKinds = new Set([...Object.keys(existing.links ?? {}), ...Object.keys(incoming.links ?? {})] as ControlEntityKind[]);
+  const links = Object.fromEntries([...linkKinds].flatMap((kind) => {
+    const ids = [...new Set([...(existing.links?.[kind] ?? []), ...(incoming.links?.[kind] ?? [])])];
+    return ids.length ? [[kind, ids]] : [];
+  })) as CanonicalControlRecord["links"];
+  return { ...existing, ...incoming, payload: incoming.payload, ...(links && Object.keys(links).length ? { links } : {}) };
+}
+
+export function filterCanonicalLinksToRemote(
+  record: CanonicalControlRecord,
+  remoteSets: Record<ControlEntityKind, Set<string>>,
+): { record: CanonicalControlRecord; skipped: Array<{ relation: ControlEntityKind; id: string }> } {
+  const skipped: Array<{ relation: ControlEntityKind; id: string }> = [];
+  const links = Object.fromEntries(Object.entries(record.links ?? {}).flatMap(([kind, ids]) => {
+    const relation = kind as ControlEntityKind;
+    const retained = (ids ?? []).filter((id) => {
+      const exists = remoteSets[relation].has(id);
+      if (!exists) skipped.push({ relation, id });
+      return exists;
+    });
+    return retained.length ? [[relation, retained]] : [];
+  })) as CanonicalControlRecord["links"];
+  const { links: _originalLinks, ...withoutLinks } = record;
+  return { record: { ...withoutLinks, ...(links && Object.keys(links).length ? { links } : {}) }, skipped };
+}
+
+export function prepareLarkBackfillEvidence(
+  recordSets: Iterable<Iterable<CanonicalControlRecord>>,
+  remoteIds: Record<ControlEntityKind, string[]>,
+): {
+  records: Map<string, CanonicalControlRecord>;
+  eligible: CanonicalControlRecord[];
+  localOnly: CanonicalControlRecord[];
+  remoteWithoutLocalByKind: Record<ControlEntityKind, number>;
+  remoteSourcesWithHistoricalEvidence: string[];
+  skippedMissingRemoteLinkTargets: string[];
+} {
+  const records = new Map<string, CanonicalControlRecord>();
+  for (const recordSet of recordSets) for (const record of recordSet) {
+    const key = `${record.kind}\n${record.id}`;
+    const existing = records.get(key);
+    records.set(key, existing ? mergeCanonicalControlRecords(existing, record) : record);
+  }
+  const remoteSets = Object.fromEntries(Object.entries(remoteIds).map(([kind, ids]) => [kind, new Set(ids)])) as Record<ControlEntityKind, Set<string>>;
+  const skippedMissingRemoteLinkTargets: string[] = [];
+  const eligible = [...records.values()].filter((record) => remoteSets[record.kind].has(record.id)).map((record) => {
+    const filtered = filterCanonicalLinksToRemote(record, remoteSets);
+    for (const skipped of filtered.skipped) skippedMissingRemoteLinkTargets.push(`${record.kind}:${record.id}->${skipped.relation}:${skipped.id}`);
+    return filtered.record;
+  });
+  const localOnly = [...records.values()].filter((record) => !remoteSets[record.kind].has(record.id));
+  const historicalSourceIds = historicalSourceEvidence(records.values());
+  const remoteSourcesWithHistoricalEvidence = remoteIds.sources
+    .filter((id) => !records.has(`sources\n${id}`) && historicalSourceIds.has(id))
+    .sort();
+  return {
+    records,
+    eligible,
+    localOnly,
+    remoteWithoutLocalByKind: remoteWithoutLocalEvidenceByKind(records, remoteIds),
+    remoteSourcesWithHistoricalEvidence,
+    skippedMissingRemoteLinkTargets: skippedMissingRemoteLinkTargets.sort(),
+  };
+}
+
 export async function importLarkSnapshot(configPath: string) {
   const config = await loadEffectiveConfig(configPath);
   if (config.controlPlane.driver !== "lark") throw new Error("import lark requires a configured Lark process store");
@@ -69,9 +136,31 @@ export async function provisionLarkProject(configPath: string) {
 }
 
 export async function auditLarkProject(configPath: string) {
-  const config = await loadEffectiveConfig(configPath);
+  const loadedConfig = await loadEffectiveConfig(configPath);
+  const config = (await hydrateControlPlaneContext(loadedConfig, { mode: "full" })).config;
   if (config.controlPlane.driver !== "lark" || !config.controlPlane.lark) throw new Error("lark audit requires a configured Lark process store");
-  return auditLarkControlPlane(config.controlPlane.lark);
+  const schema = auditLarkControlPlane(config.controlPlane.lark);
+  const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+  const store = new LarkControlPlaneStore(config.controlPlane.lark);
+  try {
+    const remoteIds = store.businessIds();
+    const evidence = prepareLarkBackfillEvidence(state.formalRunIds().map((runId) => state.controlRecords(config, runId)), remoteIds);
+    const plan = await store.plan(evidence.eligible, { includeCompatibility: true });
+    const remoteWithoutLocal = Object.values(evidence.remoteWithoutLocalByKind).reduce((sum, count) => sum + count, 0);
+    const dataReconciliation = {
+      ready: plan.creates.length === 0 && plan.updates.length === 0 && plan.conflicts.length === 0 && remoteWithoutLocal === 0,
+      expectedRecords: evidence.eligible.length,
+      pendingUpdates: plan.updates.length,
+      pendingUpdateIds: plan.updates.map((record) => `${record.kind}:${record.id}`),
+      unexpectedCreates: plan.creates.length,
+      conflicts: plan.conflicts,
+      remoteWithoutLocalByKind: evidence.remoteWithoutLocalByKind,
+      skippedMissingRemoteLinks: evidence.skippedMissingRemoteLinkTargets.length,
+      skippedMissingRemoteLinkTargets: evidence.skippedMissingRemoteLinkTargets,
+      digest: plan.digest,
+    };
+    return { ...schema, ready: schema.ready && dataReconciliation.ready, schemaReady: schema.ready, dataReconciliation };
+  } finally { state.close(); await store.close(); }
 }
 
 export function assertBackfillAuthorization(
@@ -90,6 +179,18 @@ export function assertBackfillAuthorization(
   }
 }
 
+export function assertBackfillAcknowledged(result: SyncResult): void {
+  if (!result.acknowledged || result.failed.length) {
+    throw new Error(`Lark backfill write was not acknowledged: ${result.failed.map((failure) => `${failure.kind}:${failure.id}: ${failure.detail}`).join("; ") || "canonical readback acknowledgement missing"}`);
+  }
+}
+
+export function assertBackfillPostApplyClean(plan: SyncPlan): void {
+  if (plan.creates.length || plan.updates.length || plan.conflicts.length) {
+    throw new Error(`Lark backfill post-apply plan is not clean: creates=${plan.creates.length}, updates=${plan.updates.length}, conflicts=${plan.conflicts.length}`);
+  }
+}
+
 export async function backfillLarkProject(
   configPath: string,
   apply: boolean,
@@ -104,36 +205,33 @@ export async function backfillLarkProject(
   const state = new SqliteStateStore(config.storage.path, config.projectRoot);
   const store = new LarkControlPlaneStore(config.controlPlane.lark);
   try {
-    const records = new Map<string, CanonicalControlRecord>();
-    for (const runId of state.runIds()) for (const record of state.controlRecords(config, runId)) records.set(`${record.kind}\n${record.id}`, record);
     const remoteIds = store.businessIds();
-    const remoteSets = Object.fromEntries(Object.entries(remoteIds).map(([kind, ids]) => [kind, new Set(ids)])) as Record<ControlEntityKind, Set<string>>;
-    const eligible = [...records.values()].filter((record) => remoteSets[record.kind].has(record.id));
-    const plan = await store.plan(eligible, { includeCompatibility: true });
+    const evidence = prepareLarkBackfillEvidence(state.formalRunIds().map((runId) => state.controlRecords(config, runId)), remoteIds);
+    const plan = await store.plan(evidence.eligible, { includeCompatibility: true });
     if (plan.creates.length) throw new Error(`Lark backfill invariant failed: ${plan.creates.length} supposedly existing rows were planned as creates`);
     const countByKind = (values: CanonicalControlRecord[]) => Object.fromEntries((Object.keys(config.controlPlane.lark!.tables) as ControlEntityKind[]).map((kind) => [kind, values.filter((record) => record.kind === kind).length]));
     const migrationPlan: SyncPlan = { ...plan, creates: [], unchanged: [], conflicts: [] };
-    const localOnly = [...records.values()].filter((record) => !remoteSets[record.kind].has(record.id));
-    const historicalSourceIds = historicalSourceEvidence(records.values());
-    const remoteSourcesWithHistoricalEvidence = remoteIds.sources
-      .filter((id) => !records.has(`sources\n${id}`) && historicalSourceIds.has(id))
-      .sort();
-    const remoteWithoutLocalByKind = remoteWithoutLocalEvidenceByKind(records, remoteIds);
     const summary = {
-      localEvidenceRecords: records.size,
-      existingRemoteRecords: eligible.length,
+      localEvidenceRecords: evidence.records.size,
+      existingRemoteRecords: evidence.eligible.length,
       updates: plan.updates.length,
       updatesByKind: countByKind(plan.updates),
-      localOnlySkipped: localOnly.length,
-      localOnlySkippedByKind: countByKind(localOnly),
-      remoteWithoutLocalByKind,
-      remoteSourcesWithHistoricalEvidence,
+      localOnlySkipped: evidence.localOnly.length,
+      localOnlySkippedByKind: countByKind(evidence.localOnly),
+      remoteWithoutLocalByKind: evidence.remoteWithoutLocalByKind,
+      remoteSourcesWithHistoricalEvidence: evidence.remoteSourcesWithHistoricalEvidence,
+      skippedMissingRemoteLinks: evidence.skippedMissingRemoteLinkTargets.length,
+      skippedMissingRemoteLinkTargets: evidence.skippedMissingRemoteLinkTargets,
       updateIds: plan.updates.map((record) => `${record.kind}:${record.id}`),
       digest: plan.digest,
     };
     if (!apply) return { applied: false as const, ...summary };
     assertBackfillAuthorization(summary, expectedDigest, expectedUpdates);
-    return { applied: true as const, ...summary, result: await store.apply(migrationPlan) };
+    const result = await store.apply(migrationPlan);
+    assertBackfillAcknowledged(result);
+    const postApply = await store.plan(evidence.eligible, { includeCompatibility: true });
+    assertBackfillPostApplyClean(postApply);
+    return { applied: true as const, ...summary, result, postApply: { updates: 0, creates: 0, conflicts: 0, digest: postApply.digest } };
   } finally { state.close(); await store.close(); }
 }
 

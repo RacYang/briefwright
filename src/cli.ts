@@ -352,6 +352,8 @@ larkCommand.command("audit")
       return;
     }
     for (const table of result.tables) console.log(`${table.requiredBlankFields.length || table.missingManagedFields.length || table.unrecognizedFields.length || table.typeMismatches.length ? "FAIL" : "PASS"} ${table.kind}: ${table.records} records, ${table.fields} fields, ${table.requiredBlankFields.length} incomplete core fields`);
+    console.log(`${result.dataReconciliation.ready ? "PASS" : "FAIL"} data reconciliation: ${result.dataReconciliation.pendingUpdates} pending updates, ${Object.values(result.dataReconciliation.remoteWithoutLocalByKind).reduce((sum, count) => sum + count, 0)} remote rows without local evidence`);
+    if (result.dataReconciliation.pendingUpdateIds.length) console.log(`Pending: ${result.dataReconciliation.pendingUpdateIds.join(", ")}`);
     if (!result.ready) process.exitCode = 1;
   });
 larkCommand.command("backfill")

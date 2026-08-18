@@ -484,7 +484,8 @@ function compatibilityLarkFields(record: CanonicalControlRecord, links: Partial<
     const failed = optionalInteger(completion.failed);
     return compact({
       "错误数": p.error_count ?? (failed !== undefined || modelFailures !== undefined ? (failed ?? 0) + (modelFailures ?? 0) : undefined),
-      "发现数": p.discovered_count ?? result.discoveredCount, "核验数": p.verified_count ?? result.verifiedCount,
+      "发现数": p.discovered_count ?? completion.discovered ?? result.discoveredCount,
+      "核验数": p.verified_count ?? completion.verified ?? result.verifiedCount,
       "覆盖开始": larkDate(p.coverage_started_at ?? coverage.start), "覆盖结束": larkDate(p.coverage_completed_at ?? coverage.end),
     });
   }
@@ -820,6 +821,9 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
   async plan(records: CanonicalControlRecord[], options: { includeCompatibility?: boolean } = {}): Promise<SyncPlan> {
     const creates: CanonicalControlRecord[] = []; const updates: CanonicalControlRecord[] = []; const unchanged: CanonicalControlRecord[] = [];
     const existingCounts = new Map<ControlEntityKind, number>();
+    const currentRows = new Map<string, { recordId: string; fields: Record<string, unknown> }>();
+    const availableFields = new Map<ControlEntityKind, Set<string>>();
+    const recordKey = (record: Pick<CanonicalControlRecord, "kind" | "id">) => `${record.kind}\n${record.id}`;
     const linkKinds = [...new Set(records.filter((record) => record.links && Object.values(record.links).some((ids) => ids?.length)).map((record) => record.kind))];
     for (const kind of linkKinds) {
       const fields = this.client.fields(this.config.tables[kind]);
@@ -836,6 +840,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
       const idField = LARK_ID_FIELDS[kind];
       const recordsForKind = records.filter((record) => record.kind === kind);
       const available = options.includeCompatibility ? new Set(this.client.fields(this.config.tables[kind]).map((field) => field.name)) : new Set<string>();
+      availableFields.set(kind, available);
       const readable = options.includeCompatibility
         ? [...new Set([...REQUIRED_LARK_FIELDS[kind], ...LARK_FIELD_INVENTORY[kind].map((field) => field.name)])].filter((name) => available.has(name))
         : REQUIRED_LARK_FIELDS[kind];
@@ -847,6 +852,7 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
       knownTargets[kind] = new Map([...existing.entries()].flatMap(([id, row]) => id ? [[id, row.recordId] as const] : []));
       for (const record of recordsForKind) {
         const current = existing.get(record.id); const storeRecordId = current?.recordId;
+        if (current) currentRows.set(recordKey(record), current);
         const expected = writableLarkFields(kind, larkFields(record), available);
         const expectedForComparison = comparisonFields(record, expected);
         const matches = current ? fieldsMatch(current.fields, expectedForComparison) : false;
@@ -866,6 +872,16 @@ export class LarkControlPlaneStore implements ControlPlaneStore {
         if (id) targets.set(id, row.recordId);
       }
       knownTargets[kind] = targets;
+    }
+    for (let index = unchanged.length - 1; index >= 0; index -= 1) {
+      const record = unchanged[index]!;
+      if (!record.links || !Object.values(record.links).some((ids) => ids?.length)) continue;
+      const current = currentRows.get(recordKey(record));
+      if (!current) continue;
+      const expectedLinks = larkLinkFields(record, knownTargets, availableFields.get(record.kind));
+      if (fieldsMatch(current.fields, expectedLinks)) continue;
+      unchanged.splice(index, 1);
+      updates.push(record);
     }
     const conflicts = [...new Set(creates.map((record) => record.kind))].flatMap((kind) => {
       const limit = this.config.maximumRecordsPerTable ?? 2000;

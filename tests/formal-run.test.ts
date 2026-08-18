@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import { loadEffectiveConfig } from "../src/config/load.js";
 import type { LarkRunner } from "../src/control-plane/lark-cli.js";
 import { SqliteStateStore } from "../src/state/sqlite.js";
 import { renderFormalDaily, validateFormalArtifact } from "../src/outputs/formal-markdown.js";
+import { renderFormalDailyV1, renderFormalReviewV1 } from "../src/outputs/formal-markdown-v1.js";
 
 beforeAll(() => vi.stubEnv("BRIEFWRIGHT_LOCALE", "zh-CN"));
 afterAll(() => vi.unstubAllEnvs());
@@ -173,6 +175,39 @@ describe("formal run", () => {
     await expect(verifyReplay(configPath, result.runId)).resolves.toMatchObject({
       matches: true,
       artifacts: [{ kind: "daily-markdown" }, { kind: "review-markdown" }],
+    });
+  }, 60_000);
+
+  it("replays pre-versioned formal artifacts with the frozen v1 renderer", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-replay-v1-"));
+    const configPath = await initializeProject({ directory: root, yes: true, interests: ["AI agents"] });
+    const formal = await runFormalProject(configPath, {
+      now: new Date("2026-08-11T02:00:00Z"),
+      provider: new FixtureModelProvider(),
+      fetch: async (url) => sourceResponse(String(url)),
+    });
+    const config = await loadEffectiveConfig(configPath);
+    const legacy = structuredClone(formal.result);
+    delete legacy.readerFormatVersion;
+    delete legacy.documentManifest;
+    delete legacy.integrityManifest;
+    delete legacy.publicationState;
+    const daily = renderFormalDailyV1(config, legacy);
+    const review = renderFormalReviewV1(config, legacy);
+    await writeFile(formal.dailyPath, daily, "utf8");
+    await writeFile(formal.reviewPath, review, "utf8");
+    const state = new SqliteStateStore(config.storage.path, config.projectRoot);
+    state.database.prepare("UPDATE runs SET result_json=? WHERE run_id=?").run(JSON.stringify(legacy), formal.runId);
+    state.database.prepare("UPDATE output_artifacts SET content_hash=? WHERE run_id=? AND kind='daily-markdown'")
+      .run(createHash("sha256").update(daily).digest("hex"), formal.runId);
+    state.database.prepare("UPDATE output_artifacts SET content_hash=? WHERE run_id=? AND kind='review-markdown'")
+      .run(createHash("sha256").update(review).digest("hex"), formal.runId);
+    state.close();
+
+    await expect(verifyReplay(configPath, formal.runId)).resolves.toMatchObject({
+      matches: true,
+      snapshotMatches: true,
+      diskMatches: true,
     });
   }, 60_000);
 

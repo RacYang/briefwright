@@ -78,6 +78,7 @@ export function prepareLarkBackfillEvidence(
   remoteWithoutLocalByKind: Record<ControlEntityKind, number>;
   remoteSourcesWithHistoricalEvidence: string[];
   skippedMissingRemoteLinkTargets: string[];
+  prunedLocalHistoricalLinkTargets: string[];
 } {
   const records = new Map<string, CanonicalControlRecord>();
   for (const recordSet of recordSets) for (const record of recordSet) {
@@ -87,9 +88,16 @@ export function prepareLarkBackfillEvidence(
   }
   const remoteSets = Object.fromEntries(Object.entries(remoteIds).map(([kind, ids]) => [kind, new Set(ids)])) as Record<ControlEntityKind, Set<string>>;
   const skippedMissingRemoteLinkTargets: string[] = [];
+  const prunedLocalHistoricalLinkTargets: string[] = [];
   const eligible = [...records.values()].filter((record) => remoteSets[record.kind].has(record.id)).map((record) => {
     const filtered = filterCanonicalLinksToRemote(record, remoteSets);
-    for (const skipped of filtered.skipped) skippedMissingRemoteLinkTargets.push(`${record.kind}:${record.id}->${skipped.relation}:${skipped.id}`);
+    for (const skipped of filtered.skipped) {
+      const target = `${record.kind}:${record.id}->${skipped.relation}:${skipped.id}`;
+      const hasSurvivingRemoteTarget = Boolean(filtered.record.links?.[skipped.relation]?.length);
+      const hasLocalHistoricalTarget = records.has(`${skipped.relation}\n${skipped.id}`);
+      if (hasSurvivingRemoteTarget && hasLocalHistoricalTarget) prunedLocalHistoricalLinkTargets.push(target);
+      else skippedMissingRemoteLinkTargets.push(target);
+    }
     return filtered.record;
   });
   const localOnly = [...records.values()].filter((record) => !remoteSets[record.kind].has(record.id));
@@ -104,6 +112,7 @@ export function prepareLarkBackfillEvidence(
     remoteWithoutLocalByKind: remoteWithoutLocalEvidenceByKind(records, remoteIds),
     remoteSourcesWithHistoricalEvidence,
     skippedMissingRemoteLinkTargets: skippedMissingRemoteLinkTargets.sort(),
+    prunedLocalHistoricalLinkTargets: prunedLocalHistoricalLinkTargets.sort(),
   };
 }
 
@@ -148,7 +157,8 @@ export async function auditLarkProject(configPath: string) {
     const plan = await store.plan(evidence.eligible, { includeCompatibility: true });
     const remoteWithoutLocal = Object.values(evidence.remoteWithoutLocalByKind).reduce((sum, count) => sum + count, 0);
     const dataReconciliation = {
-      ready: plan.creates.length === 0 && plan.updates.length === 0 && plan.conflicts.length === 0 && remoteWithoutLocal === 0,
+      ready: plan.creates.length === 0 && plan.updates.length === 0 && plan.conflicts.length === 0 && remoteWithoutLocal === 0
+        && evidence.skippedMissingRemoteLinkTargets.length === 0,
       expectedRecords: evidence.eligible.length,
       pendingUpdates: plan.updates.length,
       pendingUpdateIds: plan.updates.map((record) => `${record.kind}:${record.id}`),
@@ -157,6 +167,8 @@ export async function auditLarkProject(configPath: string) {
       remoteWithoutLocalByKind: evidence.remoteWithoutLocalByKind,
       skippedMissingRemoteLinks: evidence.skippedMissingRemoteLinkTargets.length,
       skippedMissingRemoteLinkTargets: evidence.skippedMissingRemoteLinkTargets,
+      prunedLocalHistoricalLinks: evidence.prunedLocalHistoricalLinkTargets.length,
+      prunedLocalHistoricalLinkTargets: evidence.prunedLocalHistoricalLinkTargets,
       digest: plan.digest,
     };
     return { ...schema, ready: schema.ready && dataReconciliation.ready, schemaReady: schema.ready, dataReconciliation };
@@ -222,6 +234,8 @@ export async function backfillLarkProject(
       remoteSourcesWithHistoricalEvidence: evidence.remoteSourcesWithHistoricalEvidence,
       skippedMissingRemoteLinks: evidence.skippedMissingRemoteLinkTargets.length,
       skippedMissingRemoteLinkTargets: evidence.skippedMissingRemoteLinkTargets,
+      prunedLocalHistoricalLinks: evidence.prunedLocalHistoricalLinkTargets.length,
+      prunedLocalHistoricalLinkTargets: evidence.prunedLocalHistoricalLinkTargets,
       updateIds: plan.updates.map((record) => `${record.kind}:${record.id}`),
       digest: plan.digest,
     };

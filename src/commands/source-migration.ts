@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { canonicalJson, loadEffectiveConfig } from "../config/load.js";
 import type { EffectiveConfig, SourceDefinition } from "../config/types.js";
+import { connectorFor } from "../connectors/registry.js";
 import { controlPlaneFor } from "../control-plane/registry.js";
 import type { CanonicalControlRecord, ControlPlaneSnapshot, ControlPlaneStore, SyncPlan } from "../control-plane/types.js";
 
@@ -82,9 +83,11 @@ export function sourceMigrationRecords(_config: EffectiveConfig, snapshot: Contr
   if (missing.length) throw new Error(`Source migration targets were not found by stable business ID: ${missing.join(", ")}`);
   return migration.sources.map((entry) => {
     const current = byId.get(entry.id)!;
-    return { ...current, payload: { ...current.payload,
+    const payload = { ...current.payload,
       ...(entry.connector ? { connector: entry.connector } : {}),
-      ...(entry.enabled === undefined ? {} : { enabled: entry.enabled }) } };
+      ...(entry.enabled === undefined ? {} : { enabled: entry.enabled }) };
+    return { ...current, payload: { ...payload,
+      ...(entry.connector ? { connector_version: connectorFor(payload as unknown as SourceDefinition).descriptor.version } : {}) } };
   });
 }
 
@@ -94,8 +97,30 @@ function summarize(plan: SyncPlan, migration: SourceMigrationDocument) {
   return { driver: plan.driver, creates: summary(plan.creates), updates: summary(plan.updates), unchanged: summary(plan.unchanged), conflicts: plan.conflicts, digest: plan.digest };
 }
 
+export function assertSourceMigrationAuthorization(
+  actual: { digest: string; updates: number },
+  expectedDigest?: string,
+  expectedUpdates?: number,
+): void {
+  if (!expectedDigest || expectedUpdates === undefined) {
+    throw new Error("sync sources apply requires --expect-digest and --expect-updates from the reviewed dry-run plan");
+  }
+  if (actual.digest !== expectedDigest) {
+    throw new Error(`Source migration plan digest changed: expected ${expectedDigest}, got ${actual.digest}. No Base changes made.`);
+  }
+  if (actual.updates !== expectedUpdates) {
+    throw new Error(`Source migration update count changed: expected ${expectedUpdates}, got ${actual.updates}. No Base changes made.`);
+  }
+}
+
+export function assertSourceMigrationPostApplyClean(plan: SyncPlan): void {
+  if (plan.creates.length || plan.updates.length || plan.conflicts.length) {
+    throw new Error(`Source migration post-apply plan is not clean: creates=${plan.creates.length}, updates=${plan.updates.length}, conflicts=${plan.conflicts.length}`);
+  }
+}
+
 export async function migrateSources(configPath: string, migrationPath: string, apply: boolean, yes: boolean,
-  options: { store?: ControlPlaneStore } = {}) {
+  options: { store?: ControlPlaneStore; expectedDigest?: string; expectedUpdates?: number } = {}) {
   if (apply && !yes) throw new Error("sync sources apply requires --yes");
   const config = await loadEffectiveConfig(configPath);
   if (config.controlPlane.driver !== "lark") throw new Error("governed source migration currently requires a configured Lark process store");
@@ -108,6 +133,7 @@ export async function migrateSources(configPath: string, migrationPath: string, 
     const plan = await store.plan(records);
     if (plan.creates.length || plan.conflicts.length) throw new Error(`Source migration plan is unsafe: creates=${plan.creates.length}, conflicts=${plan.conflicts.length}`);
     if (!apply) return { applied: false, source, revision: snapshot.revision, plan: summarize(plan, migration) };
+    assertSourceMigrationAuthorization({ digest: plan.digest, updates: plan.updates.length }, options.expectedDigest, options.expectedUpdates);
     const result = await store.apply(plan);
     if (!result.acknowledged || result.failed.length) throw new Error(`Source migration write was not acknowledged: ${result.failed.map((failure) => `${failure.id}: ${failure.detail}`).join("; ") || "readback acknowledgement missing"}`);
     const readback = await store.pull("context");
@@ -118,6 +144,10 @@ export async function migrateSources(configPath: string, migrationPath: string, 
         || (entry.enabled !== undefined && payload?.enabled !== entry.enabled);
     }).map((entry) => entry.id);
     if (mismatches.length) throw new Error(`Source migration post-apply readback mismatch: ${mismatches.join(", ")}`);
-    return { applied: true, source, beforeRevision: snapshot.revision, readbackRevision: readback.revision, targets: migration.sources.map((entry) => ({ id: entry.id, connector: entry.connector })), result };
+    const postApply = await store.plan(sourceMigrationRecords(config, readback, migration));
+    assertSourceMigrationPostApplyClean(postApply);
+    return { applied: true, source, beforeRevision: snapshot.revision, readbackRevision: readback.revision,
+      targets: migration.sources.map((entry) => ({ id: entry.id, connector: entry.connector })), result,
+      postApply: { creates: 0, updates: 0, conflicts: 0, digest: postApply.digest } };
   } finally { if (!options.store) await store.close(); }
 }

@@ -447,7 +447,9 @@ export class SqliteStateStore {
     }) : [];
     const linkedCaptureIds = [...new Set(itemRows.map((item) => String(item.capture_id)))];
     const capturePlaceholders = linkedCaptureIds.map(() => "?").join(",");
-    const captureRows = rows<Record<string, unknown>>(`SELECT * FROM captures WHERE run_id=?${capturePlaceholders ? ` OR capture_id IN (${capturePlaceholders})` : ""} ORDER BY capture_id`, runId, ...linkedCaptureIds);
+    const captureRows = rows<Record<string, unknown>>(`SELECT c.*,d.source_snapshot_json capture_source_snapshot_json FROM captures c
+      LEFT JOIN due_sources d ON d.run_id=c.run_id AND d.source_id=c.source_id
+      WHERE c.run_id=?${capturePlaceholders ? ` OR c.capture_id IN (${capturePlaceholders})` : ""} ORDER BY c.capture_id`, runId, ...linkedCaptureIds);
     const eventRows = rows<Record<string, unknown>>("SELECT * FROM events WHERE run_id=? ORDER BY event_id", runId);
     const controlEventRows = eventRows.filter((event) => {
       if (event.entity_type !== "item") return true;
@@ -462,6 +464,13 @@ export class SqliteStateStore {
     const experimentRows = rows<Record<string, unknown>>("SELECT * FROM experiments ORDER BY experiment_id");
     const workflowRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-WORKFLOW-")).map((rule) => rule.id);
     const scoreRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-SCORE-")).map((rule) => rule.id);
+    const sourceSnapshot = (value: unknown): EffectiveConfig["preset"]["sources"][number] | undefined => {
+      if (typeof value !== "string") return undefined;
+      try {
+        const parsed = JSON.parse(value) as EffectiveConfig["preset"]["sources"][number];
+        return parsed && typeof parsed.id === "string" && parsed.connector && typeof parsed.connector.type === "string" ? parsed : undefined;
+      } catch { return undefined; }
+    };
     const sourceCursorRows = new Map(rows<Record<string, unknown>>("SELECT * FROM source_cursors").map((row) => [String(row.source_id), row]));
     const sourceSettingRows = new Map(rows<Record<string, unknown>>("SELECT * FROM source_settings").map((row) => [String(row.source_id), row]));
     const metricsSince = new Date(Date.now() - 30 * 86_400_000).toISOString();
@@ -517,8 +526,9 @@ export class SqliteStateStore {
       ...captureRows.map((row) => {
         const originRunId = String(row.run_id);
         const runLinks = [...new Set([runId, ...(originRunId !== runId && publishedRunIds.has(originRunId) ? [originRunId] : [])])];
-        const source = config.preset.sources.find((entry) => entry.id === row.source_id);
-        return record("captures", String(row.capture_id), { ...row, connector_type: source?.connector.type, connector_version: source ? connectorFor(source).descriptor.version : undefined }, { runs: runLinks, sources: [String(row.source_id)], items: itemRows.filter((item) => item.capture_id === row.capture_id).map((item) => String(item.item_id)) });
+        const source = sourceSnapshot(row.capture_source_snapshot_json);
+        const { capture_source_snapshot_json: _sourceSnapshot, ...captureRow } = row;
+        return record("captures", String(row.capture_id), { ...captureRow, connector_type: source?.connector.type, connector_version: source ? connectorFor(source).descriptor.version : undefined }, { runs: runLinks, sources: [String(row.source_id)], items: itemRows.filter((item) => item.capture_id === row.capture_id).map((item) => String(item.item_id)) });
       }),
       ...itemRows.map((row) => {
         const attempt = analysisAttemptRows.get(String(row.capture_id));
@@ -532,7 +542,7 @@ export class SqliteStateStore {
       ...feedbackRows.map((row) => record("feedback", String(row.feedback_id), row, { items: [String(row.item_id)], runs: [runId] })),
       ...experimentRows.map((row) => record("experiments", String(row.experiment_id), row, { rules: config.policy.rules.map((rule) => rule.id) })),
       ...receiptRows.map((row) => {
-        const source = config.preset.sources.find((entry) => entry.id === row.source_id);
+        const source = sourceSnapshot(row.source_snapshot_json);
         const executionChannel = source?.connector.type === "github-releases" ? "GitHub" : source?.connector.type === "x-api" || source?.connector.type === "codex-browser" ? "X"
           : source?.sourceType === "paper" || source?.sourceType === "regulation" ? "论文与监管" : "官网与文档";
         const sourceCursor = sourceCursorRows.get(String(row.source_id)); const run = runRows[0];

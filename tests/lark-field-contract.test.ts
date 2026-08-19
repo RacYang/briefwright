@@ -58,7 +58,10 @@ describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
     const remoteIds = Object.fromEntries(kinds.map((kind) => [kind, kind === "sources" ? ["SRC-REUTERS-AI"]
       : kind === "runs" ? ["RUN-20260814-DAILY-R01"] : kind === "captures" ? ["CAP-REUSED"] : []])) as Record<ControlEntityKind, string[]>;
     const evidence = prepareLarkBackfillEvidence([
-      [{ kind: "captures", id: "CAP-REUSED", payload: { title: "old origin" }, links: { runs: ["RUN-20260812-DAILY-R06"], sources: ["SRC-REUTERS-AI"] } }],
+      [
+        { kind: "runs", id: "RUN-20260812-DAILY-R06", payload: { status: "abandoned" } },
+        { kind: "captures", id: "CAP-REUSED", payload: { title: "old origin" }, links: { runs: ["RUN-20260812-DAILY-R06"], sources: ["SRC-REUTERS-AI"] } },
+      ],
       [
         { kind: "sources", id: "SRC-REUTERS-AI", payload: { title: "Reuters AI" } },
         { kind: "runs", id: "RUN-20260814-DAILY-R01", payload: { status: "partial" } },
@@ -70,10 +73,39 @@ describe(`${LARK_FIELD_MANIFEST_VERSION} field coverage`, () => {
       kind: "captures", id: "CAP-REUSED", payload: { title: "surviving retry" },
       links: { runs: ["RUN-20260814-DAILY-R01"], sources: ["SRC-REUTERS-AI"] },
     });
-    expect(evidence.skippedMissingRemoteLinkTargets).toEqual([
+    expect(evidence.skippedMissingRemoteLinkTargets).toEqual([]);
+    expect(evidence.prunedLocalHistoricalLinkTargets).toEqual([
       "captures:CAP-REUSED->runs:RUN-20260812-DAILY-R06",
     ]);
     expect(evidence.remoteWithoutLocalByKind).toEqual(Object.fromEntries(kinds.map((kind) => [kind, 0])));
+  });
+
+  it("keeps a missing relationship blocking when no surviving remote target exists", () => {
+    const kinds = ["sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts"] as ControlEntityKind[];
+    const remoteIds = Object.fromEntries(kinds.map((kind) => [kind, kind === "captures" ? ["CAP-ORPHAN"] : []])) as Record<ControlEntityKind, string[]>;
+    const evidence = prepareLarkBackfillEvidence([
+      [{ kind: "captures", id: "CAP-ORPHAN", payload: {}, links: { runs: ["RUN-DELETED"] } }],
+    ], remoteIds);
+
+    expect(evidence.skippedMissingRemoteLinkTargets).toEqual([
+      "captures:CAP-ORPHAN->runs:RUN-DELETED",
+    ]);
+    expect(evidence.prunedLocalHistoricalLinkTargets).toEqual([]);
+  });
+
+  it("keeps an unknown missing target blocking even when the relationship has a survivor", () => {
+    const kinds = ["sources", "runs", "items", "events", "feedback", "experiments", "captures", "rules", "receipts"] as ControlEntityKind[];
+    const remoteIds = Object.fromEntries(kinds.map((kind) => [kind, kind === "captures" ? ["CAP-TYPO"]
+      : kind === "runs" ? ["RUN-SURVIVING"] : []])) as Record<ControlEntityKind, string[]>;
+    const evidence = prepareLarkBackfillEvidence([[
+      { kind: "runs", id: "RUN-SURVIVING", payload: { status: "success" } },
+      { kind: "captures", id: "CAP-TYPO", payload: {}, links: { runs: ["RUN-SURVIVING", "RUN-NOT-KNOWN"] } },
+    ]], remoteIds);
+
+    expect(evidence.skippedMissingRemoteLinkTargets).toEqual([
+      "captures:CAP-TYPO->runs:RUN-NOT-KNOWN",
+    ]);
+    expect(evidence.prunedLocalHistoricalLinkTargets).toEqual([]);
   });
 
   it("treats a receipt source snapshot as local evidence before cleanup classification", () => {

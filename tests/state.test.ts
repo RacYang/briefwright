@@ -46,6 +46,56 @@ describe("SQLite state", () => {
     } finally { store.close(); }
   });
 
+  it("keeps historical capture and receipt connectors frozen after current source migration", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-frozen-source-"));
+    const intent: BriefingIntent = { version: 2, name: "Frozen source", preset: "ai-daily", interests: ["AI"], schedule: "manual", output: "markdown", outputDirectory: "briefs", ai: "qwen" };
+    const resources = await loadPackagedRuntime(intent);
+    const historical = buildEffectiveConfig(root, intent, resources.preset, resources.policy, resources.prompts, resources.provider);
+    const source = historical.preset.sources[0]!;
+    source.connector = { type: "webpage", config: { url: "https://example.com/news" } };
+    const current = structuredClone(historical);
+    current.preset.sources[0]!.connector = { type: "computer-use", config: { url: "https://example.com/news", allowedHosts: ["example.com"] } };
+    const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"), root);
+    const runId = "RUN-20260814-DAILY"; const now = "2026-08-14T00:00:00Z";
+    try {
+      store.beginFormalRun(historical, runId, now, { rules: historical.policy.rules });
+      store.freezeDueSources(runId, [source], "fixture");
+      store.recordSourceResult(runId, { sourceId: source.id, result: "updated" }, [{
+        sourceId: source.id, externalKey: "event", canonicalUrl: "https://example.com/news", title: "Event", summary: "Summary",
+        capturedAt: now, contentHash: "hash", evidenceClass: "primary", discoveryUrl: "https://example.com/news",
+        discoveryChannel: "webpage", fetchStatus: "success", extractStatus: "success", parserVersion: "1.0.1",
+      }], {}, now);
+
+      const records = store.controlRecords(current, runId);
+      expect(records.find((record) => record.kind === "sources" && record.id === source.id)?.payload.connector).toEqual(current.preset.sources[0]!.connector);
+      expect(records.find((record) => record.kind === "captures")?.payload).toMatchObject({ connector_type: "webpage", connector_version: "1.0.1" });
+      expect(records.find((record) => record.kind === "receipts")?.payload).toMatchObject({ connector_type: "webpage", connector_version: "1.0.1" });
+    } finally { store.close(); }
+  });
+
+  it("does not project current connector metadata when historical source evidence is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "briefwright-missing-source-snapshot-"));
+    const intent: BriefingIntent = { version: 2, name: "Missing source snapshot", preset: "ai-daily", interests: ["AI"], schedule: "manual", output: "markdown", outputDirectory: "briefs", ai: "qwen" };
+    const resources = await loadPackagedRuntime(intent);
+    const config = buildEffectiveConfig(root, intent, resources.preset, resources.policy, resources.prompts, resources.provider);
+    const source = config.preset.sources[0]!;
+    source.connector = { type: "computer-use", config: { url: "https://example.com/news", allowedHosts: ["example.com"] } };
+    const store = new SqliteStateStore(path.join(root, ".briefwright/state.db"), root);
+    const runId = "RUN-20260814-DAILY"; const now = "2026-08-14T00:00:00Z";
+    try {
+      store.beginFormalRun(config, runId, now, { rules: config.policy.rules });
+      store.recordSourceResult(runId, { sourceId: source.id, result: "updated" }, [{
+        sourceId: source.id, externalKey: "event", canonicalUrl: "https://example.com/news", title: "Event", summary: "Summary",
+        capturedAt: now, contentHash: "hash", evidenceClass: "primary", discoveryUrl: "https://example.com/news",
+        discoveryChannel: "webpage", fetchStatus: "success", extractStatus: "success", parserVersion: "1.0.1",
+      }], {}, now);
+
+      const records = store.controlRecords(config, runId);
+      expect(records.find((record) => record.kind === "captures")?.payload.connector_type).toBeUndefined();
+      expect(records.find((record) => record.kind === "receipts")?.payload.connector_type).toBeUndefined();
+    } finally { store.close(); }
+  });
+
   it("collects unresolved control-plane records across the full retry lineage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "briefwright-lineage-repair-"));
     const intent: BriefingIntent = { version: 2, name: "Lineage repair", preset: "ai-daily", interests: ["AI"], schedule: "manual", output: "markdown", outputDirectory: "briefs", ai: "qwen" };

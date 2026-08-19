@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSourceMigration, sourceMigrationRecords } from "../src/commands/source-migration.js";
+import { assertSourceMigrationAuthorization, assertSourceMigrationPostApplyClean, parseSourceMigration, sourceMigrationRecords } from "../src/commands/source-migration.js";
 import type { EffectiveConfig, SourceDefinition } from "../src/config/types.js";
 import type { ControlPlaneSnapshot } from "../src/control-plane/types.js";
 
@@ -26,7 +26,9 @@ describe("governed source migration", () => {
     const migration = parseSourceMigration({ apiVersion: "briefwright.dev/source-migration/v1", sources: [{ id: "SRC-ONE", connector: { type: "in-app-browser", config: { url: "https://example.com/news", allowedHosts: ["example.com"] } } }] });
     const [record] = sourceMigrationRecords(config(), snapshot, migration);
     expect(record).toMatchObject({ id: "SRC-ONE", storeRecordId: "rec-one", payload: { title: "One", priority: 91, coverageDomains: ["模型"], scheduleState: { humanLocked: true }, connector: { type: "in-app-browser" } } });
-    const { connector: _beforeConnector, ...before } = source; const { connector: _afterConnector, ...after } = record!.payload as unknown as SourceDefinition;
+    const { connector: _beforeConnector, ...before } = source;
+    const { connector: _afterConnector, connector_version: connectorVersion, ...after } = record!.payload as unknown as SourceDefinition & { connector_version?: string };
+    expect(connectorVersion).toBe("1.0.0");
     expect(after).toEqual(before);
   });
 
@@ -51,5 +53,32 @@ describe("governed source migration", () => {
   it("rejects a source entry that changes neither connector nor activation", () => {
     expect(() => parseSourceMigration({ apiVersion: "briefwright.dev/source-migration/v1", sources: [{ id: "SRC-ONE" }] }))
       .toThrow("must change connector or enabled");
+  });
+
+  it("binds source writes to the reviewed digest and update count", () => {
+    expect(() => assertSourceMigrationAuthorization({ digest: "abc", updates: 3 }, "abc", 3)).not.toThrow();
+    expect(() => assertSourceMigrationAuthorization({ digest: "changed", updates: 3 }, "abc", 3)).toThrow(/digest changed/);
+    expect(() => assertSourceMigrationAuthorization({ digest: "abc", updates: 2 }, "abc", 3)).toThrow(/update count changed/);
+    expect(() => assertSourceMigrationAuthorization({ digest: "abc", updates: 3 })).toThrow(/requires --expect-digest/);
+  });
+
+  it("requires a clean canonical plan after source migration readback", () => {
+    const clean = { driver: "lark" as const, creates: [], updates: [], unchanged: [], conflicts: [], digest: "abc" };
+    expect(() => assertSourceMigrationPostApplyClean(clean)).not.toThrow();
+    expect(() => assertSourceMigrationPostApplyClean({ ...clean, updates: [{ kind: "sources", id: "SRC-ONE", payload: {} }] })).toThrow(/updates=1/);
+  });
+
+  it("locks the three production source repairs to Computer Use and exact hosts", () => {
+    const migration = parseSourceMigration({ apiVersion: "briefwright.dev/source-migration/v1", sources: [
+      { id: "SRC-XAI-NEWS", connector: { type: "computer-use", config: { url: "https://x.ai/news", allowedHosts: ["x.ai"] } } },
+      { id: "SRC-ORACLE-AI-BLOG", connector: { type: "computer-use", config: { url: "https://blogs.oracle.com/ai-and-datascience/", allowedHosts: ["blogs.oracle.com"] } } },
+      { id: "SRC-VOLCENGINE-AI", connector: { type: "computer-use", config: { url: "https://docs.volcengine.com/docs/82379/?lang=zh", allowedHosts: ["docs.volcengine.com"] } } },
+    ] });
+
+    expect(migration.sources.map((entry) => entry.connector)).toEqual([
+      { type: "computer-use", config: { url: "https://x.ai/news", allowedHosts: ["x.ai"] } },
+      { type: "computer-use", config: { url: "https://blogs.oracle.com/ai-and-datascience/", allowedHosts: ["blogs.oracle.com"] } },
+      { type: "computer-use", config: { url: "https://docs.volcengine.com/docs/82379/?lang=zh", allowedHosts: ["docs.volcengine.com"] } },
+    ]);
   });
 });

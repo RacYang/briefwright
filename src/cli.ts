@@ -420,8 +420,17 @@ syncCommand.command("apply").requiredOption("--yes", "confirm external process-s
 const syncSourcesCommand = syncCommand.command("sources").description("Plan or apply governed connector or activation migrations by stable Source ID.");
 syncSourcesCommand.command("plan").requiredOption("--file <path>", "versioned source migration document").option("-c, --config <path>", "intent configuration", "briefing.yaml")
   .action(async ({ config, file }: { config: string; file: string }) => { const result = await migrateSources(config, file, false, false); if (isJsonOutput()) return writeJson({ ok: true, command: "sync sources plan", ...result }); console.log(JSON.stringify(result, null, 2)); });
-syncSourcesCommand.command("apply").requiredOption("--file <path>", "versioned source migration document").requiredOption("--yes", "confirm external connector configuration writes").option("-c, --config <path>", "intent configuration", "briefing.yaml")
-  .action(async ({ config, file }: { config: string; file: string }) => { const result = await migrateSources(config, file, true, true); if (isJsonOutput()) return writeJson({ ok: true, command: "sync sources apply", ...result }); console.log(JSON.stringify(result, null, 2)); });
+syncSourcesCommand.command("apply").requiredOption("--file <path>", "versioned source migration document").requiredOption("--yes", "confirm external connector configuration writes")
+  .requiredOption("--expect-digest <sha256>", "bind apply to the reviewed dry-run plan digest")
+  .requiredOption("--expect-updates <count>", "bind apply to the reviewed update count")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async ({ config, file, expectDigest, expectUpdates }: { config: string; file: string; expectDigest: string; expectUpdates: string }) => {
+    const expectedUpdates = Number(expectUpdates);
+    if (!Number.isSafeInteger(expectedUpdates) || expectedUpdates < 0) throw new Error("--expect-updates must be a non-negative integer");
+    const result = await migrateSources(config, file, true, true, { expectedDigest: expectDigest, expectedUpdates });
+    if (isJsonOutput()) return writeJson({ ok: true, command: "sync sources apply", ...result });
+    console.log(JSON.stringify(result, null, 2));
+  });
 
 const feedbackCommand = program.command("feedback").description("Record human outcome signals without changing policy automatically.");
 feedbackCommand.command("add")

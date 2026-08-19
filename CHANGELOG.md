@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1.3 - 2026-08-19
+
+- add a complete nine-table Feishu schema and row-completeness audit, with required-versus-optional
+  blank classification, governed backfill planning, exact digest and update-count authorization,
+  acknowledged readback, and a zero-diff post-apply gate;
+- preserve the frozen source and connector evidence attached to historical Capture and Receipt rows,
+  including connector-version changes, so later source migrations cannot rewrite run history;
+- distinguish intentionally pruned links to remotely deleted historical runs from genuinely missing
+  relations, allowing production data slimming without hiding incomplete current records;
+- normalize Feishu numeric precision, authority ratings, cadence values, and select-field compatibility,
+  envelope oversized JSON values, and bound write batches by serialized payload size;
+- harden control-plane and local run-state contracts, source-migration readback, and recovery of
+  pre-versioned formal artifacts during deterministic replay.
+
 ## 2.1.2 - 2026-08-15
 
 - add a governed Computer Use source bridge for public dynamic pages, with frozen entry URLs, exact

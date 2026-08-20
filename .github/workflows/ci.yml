@@ -26,6 +26,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: node --test tests/run-sql-contract-tests.node.mjs
       - run: pnpm run check
       - run: pnpm run build
       - run: node dist/cli.js --json demo --directory "${{ runner.temp }}/briefwright-demo"
@@ -70,4 +71,4 @@ jobs:
       - uses: actions/setup-node@v6
         with: { node-version: 24, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm vitest run tests/control-plane-sql.integration.test.ts
+      - run: node scripts/run-sql-contract-tests.mjs

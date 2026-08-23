@@ -10,6 +10,13 @@ import { FixtureModelProvider } from "../src/providers/fixture.js";
 import { addProjectFeedback, projectFeedbackSummary } from "../src/commands/feedback.js";
 import { createPolicyExperiment, evaluatePolicyExperiment, transitionPolicyExperiment } from "../src/commands/experiment.js";
 
+const EVERY_PROPOSED_READBACK_RULE =
+  "After every\n   `PROPOSED` response, call `briefwright --json knowledge readback --request-id <same-uuid-v4>`";
+
+function hasEveryProposedReadbackRule(value: string): boolean {
+  return value.replace(/\r\n?/g, "\n").includes(EVERY_PROPOSED_READBACK_RULE);
+}
+
 function response(url: string): Response {
   if (url.includes("github")) return new Response(JSON.stringify([{ id: 1, html_url: "https://github.com/QwenLM/qwen-code/releases/tag/v1", name: "AI agents runtime", tag_name: "v1", body: "AI agents runtime adds tool budgets", published_at: "2026-08-11T00:00:00Z", draft: false, prerelease: false }]), { status: 200 });
   return new Response("<rss><channel></channel></rss>", { status: 200 });
@@ -21,7 +28,10 @@ describe("human governance", () => {
     const agent = await readFile(path.resolve(import.meta.dirname, "../skill/briefwright/agents/openai.yaml"), "utf8");
     expect(skill).toContain("--request-id <uuid-v4>");
     expect(skill).toContain("knowledge readback --request-id <same-uuid-v4>");
-    expect(skill).toContain("After every\n   `PROPOSED` response");
+    expect(hasEveryProposedReadbackRule(skill)).toBe(true);
+    const crlfSkill = skill.replace(/\r?\n/g, "\r\n");
+    expect(hasEveryProposedReadbackRule(crlfSkill)).toBe(true);
+    expect(hasEveryProposedReadbackRule(crlfSkill.replace("After every", "After some"))).toBe(false);
     expect(skill).toContain("selection confirmation CONSUMED; commit confirmation REQUIRED");
     expect(skill).toContain("generic signal as feedback and exposes the selection-linked receipt separately");
     expect(skill).toContain("stored operation, bounded diff, expected target hash, resulting content hash, proposal digest");

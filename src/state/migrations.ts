@@ -328,6 +328,61 @@ export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
       SELECT run_id,item_id,capture_id,analysis_json FROM items;
     `,
   },
+  {
+    version: 13,
+    name: "governed-knowledge-intake-receipts",
+    sql: `
+      CREATE TABLE IF NOT EXISTS knowledge_selections (
+        selection_id TEXT PRIMARY KEY,
+        feedback_id TEXT NOT NULL UNIQUE REFERENCES feedback(feedback_id),
+        item_id TEXT NOT NULL REFERENCES items(item_id),
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        capture_id TEXT NOT NULL REFERENCES captures(capture_id),
+        selection_digest TEXT NOT NULL,
+        source_snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, item_id, selection_digest)
+      );
+      ALTER TABLE knowledge_proposals ADD COLUMN selection_id TEXT REFERENCES knowledge_selections(selection_id);
+      ALTER TABLE knowledge_proposals ADD COLUMN operation TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN proposal_digest TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN resulting_content_hash TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN diff TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN expected_write_count INTEGER;
+      ALTER TABLE knowledge_proposals ADD COLUMN source_snapshot_json TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN vault_scan_digest TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN expected_post_scan_digest TEXT;
+      ALTER TABLE knowledge_proposals ADD COLUMN vault_scan_json TEXT;
+      CREATE INDEX IF NOT EXISTS knowledge_proposals_selection
+        ON knowledge_proposals(selection_id, created_at);
+      CREATE TABLE IF NOT EXISTS knowledge_commit_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        proposal_id TEXT NOT NULL UNIQUE REFERENCES knowledge_proposals(proposal_id),
+        proposal_digest TEXT NOT NULL,
+        expected_write_count INTEGER NOT NULL,
+        target_path TEXT NOT NULL,
+        expected_target_hash TEXT NOT NULL,
+        expected_result_hash TEXT NOT NULL,
+        observed_result_hash TEXT NOT NULL,
+        observed_bytes INTEGER NOT NULL,
+        readback_status TEXT NOT NULL,
+        committed_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    version: 14,
+    name: "knowledge-idempotency-and-signal-separation",
+    sql: `
+      ALTER TABLE knowledge_proposals ADD COLUMN request_id TEXT;
+      CREATE UNIQUE INDEX knowledge_proposals_request_id
+        ON knowledge_proposals(request_id COLLATE NOCASE) WHERE request_id IS NOT NULL;
+      UPDATE feedback
+        SET feedback_type='knowledge-selection-receipt'
+        WHERE feedback_id IN (SELECT feedback_id FROM knowledge_selections)
+          AND feedback_type='knowledge-worthy';
+    `,
+  },
 ];
 
 function checksum(migration: DatabaseMigration): string {

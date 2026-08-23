@@ -14,18 +14,57 @@ import { connectorFor } from "../connectors/registry.js";
 import type { CanonicalControlRecord } from "../control-plane/types.js";
 import { countReceipts, runOutcome } from "../core/accounting.js";
 import { canonicalEventIdentity, replayCandidateUnderPolicy, selectCandidatesUnderPolicy } from "../core/selection.js";
+import {
+  knowledgeProposalDigest,
+  knowledgeSelectionDigest,
+  knowledgeSelectionNote,
+  knowledgeVaultScanDigest,
+  sha256,
+  type KnowledgeItemIdentity,
+  type KnowledgeOperation,
+  type KnowledgeProposalBinding,
+  type KnowledgeReference,
+  type KnowledgeSelection,
+  type KnowledgeVaultScan,
+} from "../core/knowledge-intake.js";
 import { databaseMigrationStatus, migrateDatabase } from "./migrations.js";
 import type { FeedbackType } from "../commands/feedback.js";
+
+const KNOWLEDGE_SELECTION_RECEIPT_TYPE = "knowledge-selection-receipt";
+
+type KnowledgeProposalRecord = KnowledgeProposalBinding & {
+  requestId: string | null;
+  status: string;
+  content: string;
+  proposalDigest: string;
+  sourceSnapshot: KnowledgeSelection;
+  vaultScan: KnowledgeVaultScan;
+  createdAt: string;
+};
+
+type KnowledgeCommitReceipt = {
+  receiptId: string;
+  proposalId: string;
+  proposalDigest: string;
+  expectedWriteCount: number;
+  observedResultHash: string;
+  observedBytes: number;
+  readbackStatus: string;
+  committedAt: string;
+};
 
 export class SqliteStateStore {
   readonly database: DatabaseSync;
 
-  constructor(databasePath: string, projectRoot: string) {
-    prepareSafeFilePathSync(projectRoot, databasePath);
-    this.database = new DatabaseSync(databasePath);
+  constructor(databasePath: string, projectRoot: string, options: { readOnly?: boolean } = {}) {
+    if (!options.readOnly) prepareSafeFilePathSync(projectRoot, databasePath);
+    this.database = options.readOnly
+      ? new DatabaseSync(databasePath, { readOnly: true })
+      : new DatabaseSync(databasePath);
     this.database.exec("PRAGMA foreign_keys = ON");
     const status = databaseMigrationStatus(this.database);
     if (status.current === 0) {
+      if (options.readOnly) throw new Error("Knowledge state database is not initialized");
       migrateDatabase(this.database, { databasePath, write: true, backup: false });
     } else if (status.pending.length > 0) {
       throw new Error(`Database schema ${status.current} requires migration to ${status.latest}. Run 'briefwright db migrate --write'.`);
@@ -460,7 +499,11 @@ export class SqliteStateStore {
         return payload.toState === "已生成简报" || payload.toState === "人工复核";
       } catch { return false; }
     });
-    const feedbackRows = rows<Record<string, unknown>>(`SELECT f.* FROM feedback f JOIN items i ON i.item_id=f.item_id WHERE i.run_id=? ORDER BY f.feedback_id`, runId);
+    const feedbackRows = rows<Record<string, unknown>>(`SELECT f.* FROM feedback f
+      JOIN items i ON i.item_id=f.item_id
+      LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+      WHERE i.run_id=? AND ks.feedback_id IS NULL AND f.feedback_type<>?
+      ORDER BY f.feedback_id`, runId, KNOWLEDGE_SELECTION_RECEIPT_TYPE);
     const experimentRows = rows<Record<string, unknown>>("SELECT * FROM experiments ORDER BY experiment_id");
     const workflowRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-WORKFLOW-")).map((rule) => rule.id);
     const scoreRuleIds = config.policy.rules.filter((rule) => rule.id.startsWith("RULE-SCORE-")).map((rule) => rule.id);
@@ -864,10 +907,43 @@ export class SqliteStateStore {
     });
   }
 
-  feedbackSummary(): { total: number; reviewedItems: number; firstAt: string | null; lastAt: string | null; byType: Record<string, number> } {
-    const rows = this.database.prepare("SELECT feedback_type,COUNT(*) count FROM feedback GROUP BY feedback_type").all() as Array<{ feedback_type: string; count: number }>;
-    const range = this.database.prepare("SELECT COUNT(DISTINCT item_id) reviewed,MIN(created_at) first_at,MAX(created_at) last_at FROM feedback").get() as { reviewed: number; first_at: string | null; last_at: string | null };
-    return { total: rows.reduce((sum, row) => sum + row.count, 0), reviewedItems: range.reviewed, firstAt: range.first_at, lastAt: range.last_at, byType: Object.fromEntries(rows.map((row) => [row.feedback_type, row.count])) };
+  feedbackSummary(): {
+    total: number;
+    reviewedItems: number;
+    selectionReceipts: number;
+    effectivePositiveItems: number;
+    firstAt: string | null;
+    lastAt: string | null;
+    byType: Record<string, number>;
+  } {
+    const rows = this.database.prepare(`SELECT f.feedback_type,COUNT(*) count FROM feedback f
+      LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+      WHERE ks.feedback_id IS NULL AND f.feedback_type<>?
+      GROUP BY f.feedback_type`).all(KNOWLEDGE_SELECTION_RECEIPT_TYPE) as Array<{ feedback_type: string; count: number }>;
+    const range = this.database.prepare(`SELECT COUNT(DISTINCT item_id) reviewed,MIN(created_at) first_at,MAX(created_at) last_at FROM (
+      SELECT f.item_id,f.created_at FROM feedback f
+        LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+        WHERE ks.feedback_id IS NULL AND f.feedback_type<>?
+      UNION ALL
+      SELECT item_id,created_at FROM knowledge_selections
+    )`).get(KNOWLEDGE_SELECTION_RECEIPT_TYPE) as { reviewed: number; first_at: string | null; last_at: string | null };
+    const selectionReceipts = Number((this.database.prepare("SELECT COUNT(*) count FROM knowledge_selections").get() as { count: number }).count);
+    const effectivePositiveItems = Number((this.database.prepare(`SELECT COUNT(DISTINCT item_id) count FROM (
+      SELECT f.item_id FROM feedback f
+        LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+        WHERE ks.feedback_id IS NULL AND f.feedback_type IN ('used','knowledge-worthy','include')
+      UNION
+      SELECT item_id FROM knowledge_selections
+    )`).get() as { count: number }).count);
+    return {
+      total: rows.reduce((sum, row) => sum + row.count, 0),
+      reviewedItems: range.reviewed,
+      selectionReceipts,
+      effectivePositiveItems,
+      firstAt: range.first_at,
+      lastAt: range.last_at,
+      byType: Object.fromEntries(rows.map((row) => [row.feedback_type, row.count])),
+    };
   }
 
   diagnoseImprovements(now = new Date(), windowDays = 30, domains: string[] = []): { diagnosisId: string; metrics: Record<string, unknown>; findings: Array<Record<string, unknown>>; proposals: Array<Record<string, unknown>> } {
@@ -875,7 +951,12 @@ export class SqliteStateStore {
     const run = this.database.prepare(`SELECT COUNT(*) runs,SUM(CASE WHEN status='partial' THEN 1 ELSE 0 END) partials,SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) failures FROM runs WHERE generated_at>=?`).get(start) as { runs: number; partials: number | null; failures: number | null };
     const receipt = this.database.prepare(`SELECT COUNT(*) total,SUM(CASE WHEN result='failed' THEN 1 ELSE 0 END) failures,SUM(CASE WHEN result='updated' THEN 1 ELSE 0 END) updates FROM receipts WHERE COALESCE(attempted_at,'')>=?`).get(start) as { total: number; failures: number | null; updates: number | null };
     const corrections = this.database.prepare(`SELECT feedback_type,COUNT(*) count FROM feedback WHERE created_at>=? AND feedback_type IN ('classification-correction','score-correction','source-correction','process-feedback') GROUP BY feedback_type`).all(start) as Array<{ feedback_type: string; count: number }>;
-    const feedback = this.database.prepare(`SELECT feedback_type,COUNT(*) count FROM feedback WHERE created_at>=? GROUP BY feedback_type`).all(start) as Array<{ feedback_type: string; count: number }>;
+    const feedback = this.database.prepare(`SELECT f.feedback_type,COUNT(*) count FROM feedback f
+      LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+      WHERE f.created_at>=? AND ks.feedback_id IS NULL AND f.feedback_type<>?
+      GROUP BY f.feedback_type`).all(start, KNOWLEDGE_SELECTION_RECEIPT_TYPE) as Array<{ feedback_type: string; count: number }>;
+    const selectionSignals = this.database.prepare(`SELECT COUNT(*) receipts,COUNT(DISTINCT item_id) items
+      FROM knowledge_selections WHERE created_at>=?`).get(start) as { receipts: number; items: number };
     const analyses = this.database.prepare(`SELECT COUNT(*) total,SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) failures,
       AVG(duration_ms) average_duration_ms,SUM(input_tokens) input_tokens,SUM(output_tokens) output_tokens,SUM(cost_usd) known_cost_usd,
       SUM(CASE WHEN status='success' AND cost_usd IS NULL THEN 1 ELSE 0 END) unknown_cost_observations FROM analysis_attempts WHERE attempted_at>=?`).get(start) as
@@ -885,7 +966,9 @@ export class SqliteStateStore {
     const inWindow = (value: unknown) => typeof value === "string" && value >= start && value <= end;
     const remoteRuns = this.remoteControlRecords("runs").filter((record) => inWindow(record.payload.generated_at ?? record.payload.started_at));
     const remoteReceipts = this.remoteControlRecords("receipts").filter((record) => inWindow(record.payload.attempted_at ?? record.payload.completed_at));
-    const remoteFeedback = this.remoteControlRecords("feedback").filter((record) => inWindow(record.payload.created_at));
+    const remoteFeedback = this.remoteControlRecords("feedback").filter((record) =>
+      inWindow(record.payload.created_at) && record.payload.feedback_type !== KNOWLEDGE_SELECTION_RECEIPT_TYPE,
+    );
     const feedbackCounts = new Map(feedback.map((row) => [row.feedback_type, row.count]));
     for (const record of remoteFeedback) {
       const type = String(record.payload.feedback_type ?? "reviewed"); feedbackCounts.set(type, (feedbackCounts.get(type) ?? 0) + 1);
@@ -894,6 +977,7 @@ export class SqliteStateStore {
     const coverageGaps = this.coverageGapDomains(domains, now, windowDays);
     const metrics = { windowDays, runs: run.runs, partialRuns: run.partials ?? 0, failedRuns: run.failures ?? 0, receipts: receipt.total, failedReceipts: receipt.failures ?? 0, updatedReceipts: receipt.updates ?? 0,
       analyses: analyses.total, failedAnalyses: analyses.failures ?? 0, duplicateClusters: duplicates.clusters, feedbackByType,
+      knowledgeSelectionReceipts: selectionSignals.receipts, knowledgeSelectedItems: selectionSignals.items,
       modelPerformance: { averageDurationMs: analyses.average_duration_ms, inputTokens: analyses.input_tokens ?? 0, outputTokens: analyses.output_tokens ?? 0,
         knownCostUsd: analyses.known_cost_usd ?? 0, unknownCostObservations: analyses.unknown_cost_observations ?? 0 },
       coverageGaps,
@@ -990,8 +1074,13 @@ export class SqliteStateStore {
   evaluateExperiment(id: string, now = new Date()): { eligible: boolean; metrics: Record<string, unknown> } {
     const experiment = this.experiment(id);
     if (experiment.status !== "candidate" && experiment.status !== "evaluated") throw new Error(`Experiment ${id} cannot be evaluated from status ${experiment.status}`);
-    const reviewed = this.database.prepare(`SELECT i.item_id,MIN(f.created_at) first_at,MAX(f.created_at) last_at
-      FROM feedback f JOIN items i ON i.item_id=f.item_id GROUP BY i.item_id ORDER BY i.item_id`).all() as Array<{ item_id: string; first_at: string; last_at: string }>;
+    const reviewed = this.database.prepare(`SELECT item_id,MIN(created_at) first_at,MAX(created_at) last_at FROM (
+      SELECT f.item_id,f.created_at FROM feedback f
+        LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+        WHERE ks.feedback_id IS NULL AND f.feedback_type<>?
+      UNION ALL
+      SELECT item_id,created_at FROM knowledge_selections
+    ) GROUP BY item_id ORDER BY item_id`).all(KNOWLEDGE_SELECTION_RECEIPT_TYPE) as Array<{ item_id: string; first_at: string; last_at: string }>;
     const firstAt = reviewed.reduce<string | null>((value, row) => value === null || row.first_at < value ? row.first_at : value, null);
     const lastAt = reviewed.reduce<string | null>((value, row) => value === null || row.last_at > value ? row.last_at : value, null);
     const spanDays = firstAt && lastAt ? Math.floor((new Date(lastAt).getTime() - new Date(firstAt).getTime()) / 86_400_000) : 0;
@@ -1009,17 +1098,40 @@ export class SqliteStateStore {
     const baseline = selectCandidatesUnderPolicy(experiment.baselinePolicy, items.map((item) => replayCandidateUnderPolicy(experiment.baselinePolicy, item)), { eventDedupe: false });
     const candidate = selectCandidatesUnderPolicy(experiment.policy, items.map((item) => replayCandidateUnderPolicy(experiment.policy, item)), { eventDedupe: false });
     const sampleDigest = createHash("sha256").update(`${sample!.itemIds.join("\n")}\n${sample!.feedbackCutoff}`).digest("hex");
-    const frozenFeedback = this.database.prepare(`SELECT MIN(created_at) first_at,MAX(created_at) last_at FROM feedback
-      WHERE item_id IN (${placeholders}) AND created_at<=?`).get(...sample!.itemIds, sample!.feedbackCutoff) as { first_at: string | null; last_at: string | null };
+    const frozenFeedback = this.database.prepare(`SELECT MIN(created_at) first_at,MAX(created_at) last_at FROM (
+      SELECT f.item_id,f.created_at FROM feedback f
+        LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+        WHERE ks.feedback_id IS NULL AND f.feedback_type<>?
+      UNION ALL
+      SELECT item_id,created_at FROM knowledge_selections
+    ) WHERE item_id IN (${placeholders}) AND created_at<=?`).get(
+      KNOWLEDGE_SELECTION_RECEIPT_TYPE,
+      ...sample!.itemIds,
+      sample!.feedbackCutoff,
+    ) as { first_at: string | null; last_at: string | null };
     const frozenSpanDays = frozenFeedback.first_at && frozenFeedback.last_at
       ? Math.floor((new Date(frozenFeedback.last_at).getTime() - new Date(frozenFeedback.first_at).getTime()) / 86_400_000) : 0;
-    const feedbackRows = this.database.prepare(`SELECT feedback_type,COUNT(*) count FROM feedback
-      WHERE item_id IN (${placeholders}) AND created_at<=? GROUP BY feedback_type`).all(...sample!.itemIds, sample!.feedbackCutoff) as Array<{ feedback_type: string; count: number }>;
-    const feedbackDetails = this.database.prepare(`SELECT item_id,feedback_type FROM feedback
-      WHERE item_id IN (${placeholders}) AND created_at<=? ORDER BY item_id,feedback_type`).all(...sample!.itemIds, sample!.feedbackCutoff) as Array<{ item_id: string; feedback_type: string }>;
+    const feedbackRows = this.database.prepare(`SELECT f.feedback_type,COUNT(*) count FROM feedback f
+      LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+      WHERE f.item_id IN (${placeholders}) AND f.created_at<=?
+        AND ks.feedback_id IS NULL AND f.feedback_type<>?
+      GROUP BY f.feedback_type`).all(...sample!.itemIds, sample!.feedbackCutoff, KNOWLEDGE_SELECTION_RECEIPT_TYPE) as Array<{ feedback_type: string; count: number }>;
+    const feedbackDetails = this.database.prepare(`SELECT f.item_id,f.feedback_type FROM feedback f
+      LEFT JOIN knowledge_selections ks ON ks.feedback_id=f.feedback_id
+      WHERE f.item_id IN (${placeholders}) AND f.created_at<=?
+        AND ks.feedback_id IS NULL AND f.feedback_type<>?
+      ORDER BY f.item_id,f.feedback_type`).all(...sample!.itemIds, sample!.feedbackCutoff, KNOWLEDGE_SELECTION_RECEIPT_TYPE) as Array<{ item_id: string; feedback_type: string }>;
+    const selectionDetails = this.database.prepare(`SELECT item_id FROM knowledge_selections
+      WHERE item_id IN (${placeholders}) AND created_at<=? ORDER BY item_id`).all(
+      ...sample!.itemIds,
+      sample!.feedbackCutoff,
+    ) as Array<{ item_id: string }>;
     const selectedIds = (selection: typeof baseline) => new Set([...selection.daily, ...selection.review].map((item) => item.id));
     const baselineSelected = selectedIds(baseline); const candidateSelected = selectedIds(candidate);
-    const positiveIds = new Set(feedbackDetails.filter((row) => ["used", "knowledge-worthy", "include"].includes(row.feedback_type)).map((row) => row.item_id));
+    const positiveIds = new Set([
+      ...feedbackDetails.filter((row) => ["used", "knowledge-worthy", "include"].includes(row.feedback_type)).map((row) => row.item_id),
+      ...selectionDetails.map((row) => row.item_id),
+    ]);
     const negativeIds = new Set(feedbackDetails.filter((row) => ["ignored", "skip", "classification-correction", "score-correction", "source-correction"].includes(row.feedback_type)).map((row) => row.item_id));
     const utility = (selected: Set<string>) => ({ positiveRetained: [...positiveIds].filter((id) => selected.has(id)).length, negativeSelected: [...negativeIds].filter((id) => selected.has(id)).length });
     const baselineUtility = utility(baselineSelected); const candidateUtility = utility(candidateSelected);
@@ -1061,30 +1173,434 @@ export class SqliteStateStore {
     return { status, policy: current.policy };
   }
 
-  createKnowledgeProposal(itemId: string, targetPath: string, targetHeading: string | undefined, expectedTargetHash: string | undefined, content: string, now = new Date().toISOString(), proposalId = `KNP-${randomUUID()}`): string {
-    const item = this.database.prepare("SELECT 1 FROM items WHERE item_id=?").get(itemId);
-    if (!item) throw new Error(`Item not found: ${itemId}`);
-    this.database.prepare(`INSERT INTO knowledge_proposals(proposal_id,item_id,status,target_path,target_heading,expected_target_hash,content,created_at)
-      VALUES (?,?,?,?,?,?,?,?)`).run(proposalId, itemId, "proposed", targetPath, targetHeading ?? null, expectedTargetHash ?? null, content, now);
-    return proposalId;
+  resolvePublishedKnowledgeItem(reference: KnowledgeReference): KnowledgeItemIdentity {
+    const value = normalizeScalarText(reference.value);
+    if (!value) throw new Error("Knowledge reference must be a non-empty exact value");
+    const predicates: Record<KnowledgeReference["kind"], string> = {
+      "item-id": "ri.item_id=?",
+      url: "c.canonical_url=?",
+      title: "json_extract(ri.item_json,'$.title')=?",
+    };
+    const predicate = predicates[reference.kind];
+    if (!predicate) throw new Error(`Unknown knowledge reference kind: ${String(reference.kind)}`);
+    const parameters: string[] = [value];
+    const runPredicate = reference.runId ? " AND ri.run_id=?" : "";
+    if (reference.runId) parameters.push(reference.runId);
+    const matches = this.database.prepare(`SELECT
+        ri.item_id,ri.run_id,ri.capture_id,ri.item_json,
+        c.source_id,c.content_hash,c.canonical_url,r.generated_at
+      FROM run_items ri
+      JOIN captures c ON c.capture_id=ri.capture_id
+      JOIN runs r ON r.run_id=ri.run_id
+      WHERE ${predicate}${runPredicate}
+        AND r.status IN ('success','partial','empty')
+        AND json_extract(r.result_json,'$.publicationState')='published'
+        AND json_extract(ri.item_json,'$.disposition') IN ('daily','review')
+        AND (SELECT COUNT(*) FROM output_artifacts a
+          WHERE a.run_id=ri.run_id AND a.kind IN ('daily-markdown','review-markdown'))=2
+      ORDER BY r.generated_at DESC,ri.run_id`).all(...parameters) as Array<{
+        item_id: string;
+        run_id: string;
+        capture_id: string;
+        item_json: string;
+        source_id: string;
+        content_hash: string;
+        canonical_url: string;
+        generated_at: string;
+      }>;
+    if (matches.length === 0) {
+      throw new Error("No published Daily or Review item matched the exact knowledge reference");
+    }
+    if (matches.length !== 1) {
+      throw new Error(`Knowledge reference matched ${matches.length} published items; specify the exact run ID`);
+    }
+    const row = matches[0]!;
+    const item = JSON.parse(row.item_json) as BriefingItem;
+    if (
+      item.id !== row.item_id
+      || item.sourceId !== row.source_id
+      || item.captureHash !== row.content_hash
+      || item.url !== row.canonical_url
+      || (item.disposition !== "daily" && item.disposition !== "review")
+    ) {
+      throw new Error(`Published item snapshot identity mismatch: ${row.item_id}`);
+    }
+    return {
+      itemId: row.item_id,
+      runId: row.run_id,
+      captureId: row.capture_id,
+      sourceId: row.source_id,
+      captureHash: row.content_hash,
+      canonicalUrl: row.canonical_url,
+      title: item.title,
+      disposition: item.disposition,
+      generatedAt: row.generated_at,
+      item,
+    };
   }
 
-  knowledgeProposal(id: string): { id: string; itemId: string; status: string; targetPath: string; targetHeading?: string; expectedTargetHash?: string; content: string } {
-    const row = this.database.prepare(`SELECT item_id,status,target_path,target_heading,expected_target_hash,content FROM knowledge_proposals WHERE proposal_id=?`).get(id) as
-      { item_id: string; status: string; target_path: string; target_heading: string | null; expected_target_hash: string | null; content: string } | undefined;
+  createKnowledgeSelection(
+    reference: KnowledgeReference,
+    expectedSelectionDigest: string,
+    now = new Date().toISOString(),
+  ): KnowledgeSelection & { created: boolean } {
+    const identity = this.resolvePublishedKnowledgeItem(reference);
+    const selectionDigest = knowledgeSelectionDigest(identity);
+    if (selectionDigest !== expectedSelectionDigest) {
+      throw new Error("Published item identity changed after resolve; resolve again before selecting");
+    }
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.database.prepare(`SELECT selection_id,created_at
+        FROM knowledge_selections WHERE run_id=? AND item_id=? AND selection_digest=?`)
+        .get(identity.runId, identity.itemId, selectionDigest) as
+        { selection_id: string; created_at: string } | undefined;
+      if (existing) {
+        this.database.exec("COMMIT");
+        const selection = this.knowledgeSelection(existing.selection_id);
+        return {
+          ...selection,
+          created: false,
+        };
+      }
+      const feedbackId = `FDB-${randomUUID()}`;
+      const selectionId = `KNS-${randomUUID()}`;
+      this.database.prepare("INSERT INTO feedback(feedback_id,item_id,run_id,feedback_type,note,created_at) VALUES (?,?,?,?,?,?)")
+        .run(feedbackId, identity.itemId, identity.runId, KNOWLEDGE_SELECTION_RECEIPT_TYPE, knowledgeSelectionNote(selectionDigest), now);
+      this.database.prepare(`INSERT INTO knowledge_selections(
+        selection_id,feedback_id,item_id,run_id,capture_id,selection_digest,source_snapshot_json,created_at
+      ) VALUES (?,?,?,?,?,?,?,?)`).run(
+        selectionId,
+        feedbackId,
+        identity.itemId,
+        identity.runId,
+        identity.captureId,
+        selectionDigest,
+        canonicalJson(identity),
+        now,
+      );
+      this.database.exec("COMMIT");
+      return { ...identity, selectionId, selectionDigest, selectedAt: now, created: true };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  knowledgeSelection(selectionId: string): KnowledgeSelection {
+    const row = this.database.prepare(`SELECT item_id,run_id,capture_id,selection_digest,source_snapshot_json,created_at
+      FROM knowledge_selections WHERE selection_id=?`).get(selectionId) as {
+        item_id: string;
+        run_id: string;
+        capture_id: string;
+        selection_digest: string;
+        source_snapshot_json: string;
+        created_at: string;
+      } | undefined;
+    if (!row) throw new Error(`Knowledge selection not found: ${selectionId}`);
+    const identity = this.resolvePublishedKnowledgeItem({ kind: "item-id", value: row.item_id, runId: row.run_id });
+    if (identity.captureId !== row.capture_id || knowledgeSelectionDigest(identity) !== row.selection_digest) {
+      throw new Error(`Knowledge selection identity mismatch: ${selectionId}`);
+    }
+    const storedIdentity = JSON.parse(row.source_snapshot_json) as KnowledgeItemIdentity;
+    if (canonicalJson(storedIdentity) !== canonicalJson(identity)) {
+      throw new Error(`Knowledge selection source snapshot mismatch: ${selectionId}`);
+    }
+    return {
+      ...identity,
+      selectionId,
+      selectionDigest: row.selection_digest,
+      selectedAt: row.created_at,
+    };
+  }
+
+  createKnowledgeProposal(input: KnowledgeProposalBinding & {
+    requestId: string;
+    proposalDigest: string;
+    content: string;
+    sourceSnapshot: KnowledgeSelection;
+    vaultScan: KnowledgeVaultScan;
+    now?: string;
+  }): string {
+    const { requestId, proposalDigest, content, sourceSnapshot, vaultScan, now = new Date().toISOString(), ...binding } = input;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId)) {
+      throw new Error("Knowledge proposals require a canonical lowercase UUID v4 request ID");
+    }
+    const selection = this.knowledgeSelection(binding.selectionId);
+    if (
+      selection.selectionDigest !== binding.selectionDigest
+      || selection.itemId !== binding.itemId
+      || selection.runId !== binding.runId
+      || selection.captureId !== binding.captureId
+      || selection.captureHash !== binding.captureHash
+      || canonicalJson(selection) !== canonicalJson(sourceSnapshot)
+    ) {
+      throw new Error("Knowledge proposal does not match its durable selection");
+    }
+    if (binding.expectedWriteCount !== 1) throw new Error("Knowledge proposals must bind exactly one target write");
+    if (sha256(content) !== binding.resultingContentHash) throw new Error("Knowledge proposal content hash mismatch");
+    if (knowledgeVaultScanDigest(vaultScan) !== binding.vaultScanDigest) throw new Error("Knowledge proposal vault scan digest mismatch");
+    if (vaultScan.matches.length !== 0) throw new Error("Knowledge proposals require a vault scan with zero source matches");
+    if (knowledgeProposalDigest(binding) !== proposalDigest) throw new Error("Knowledge proposal digest mismatch");
+    this.database.prepare(`INSERT INTO knowledge_proposals(
+      proposal_id,item_id,status,target_path,target_heading,expected_target_hash,content,created_at,
+      selection_id,operation,proposal_digest,resulting_content_hash,diff,expected_write_count,source_snapshot_json,
+      vault_scan_digest,expected_post_scan_digest,vault_scan_json,request_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      binding.proposalId,
+      binding.itemId,
+      "proposed",
+      binding.targetPath,
+      binding.targetHeading ?? null,
+      binding.expectedTargetHash,
+      content,
+      now,
+      binding.selectionId,
+      binding.operation,
+      proposalDigest,
+      binding.resultingContentHash,
+      binding.diff,
+      binding.expectedWriteCount,
+      canonicalJson(sourceSnapshot),
+      binding.vaultScanDigest,
+      binding.expectedPostScanDigest,
+      canonicalJson(vaultScan),
+      requestId,
+    );
+    return binding.proposalId;
+  }
+
+  knowledgeProposal(id: string): KnowledgeProposalRecord {
+    const row = this.database.prepare(`SELECT
+      item_id,status,target_path,target_heading,expected_target_hash,content,selection_id,operation,
+      proposal_digest,resulting_content_hash,diff,expected_write_count,source_snapshot_json,
+      vault_scan_digest,expected_post_scan_digest,vault_scan_json,request_id,created_at
+      FROM knowledge_proposals WHERE proposal_id=?`).get(id) as {
+        item_id: string;
+        status: string;
+        target_path: string;
+        target_heading: string | null;
+        expected_target_hash: string | null;
+        content: string;
+        selection_id: string | null;
+        operation: string | null;
+        proposal_digest: string | null;
+        resulting_content_hash: string | null;
+        diff: string | null;
+        expected_write_count: number | null;
+        source_snapshot_json: string | null;
+        vault_scan_digest: string | null;
+        expected_post_scan_digest: string | null;
+        vault_scan_json: string | null;
+        request_id: string | null;
+        created_at: string;
+      } | undefined;
     if (!row) throw new Error(`Knowledge proposal not found: ${id}`);
-    return { id, itemId: row.item_id, status: row.status, targetPath: row.target_path, ...(row.target_heading ? { targetHeading: row.target_heading } : {}), ...(row.expected_target_hash ? { expectedTargetHash: row.expected_target_hash } : {}), content: row.content };
+    if (
+      !row.selection_id
+      || (row.operation !== "create" && row.operation !== "merge")
+      || !row.proposal_digest
+      || !row.resulting_content_hash
+      || row.diff === null
+      || row.expected_write_count !== 1
+      || !row.source_snapshot_json
+      || !row.expected_target_hash
+      || !row.vault_scan_digest
+      || !row.expected_post_scan_digest
+      || !row.vault_scan_json
+    ) {
+      throw new Error(`Knowledge proposal ${id} predates the governed intake contract and must be recreated`);
+    }
+    const sourceSnapshot = JSON.parse(row.source_snapshot_json) as KnowledgeSelection;
+    const vaultScan = JSON.parse(row.vault_scan_json) as KnowledgeVaultScan;
+    const binding: KnowledgeProposalBinding = {
+      proposalId: id,
+      selectionId: row.selection_id,
+      selectionDigest: sourceSnapshot.selectionDigest,
+      itemId: row.item_id,
+      runId: sourceSnapshot.runId,
+      captureId: sourceSnapshot.captureId,
+      captureHash: sourceSnapshot.captureHash,
+      operation: row.operation as KnowledgeOperation,
+      targetPath: row.target_path,
+      ...(row.target_heading ? { targetHeading: row.target_heading } : {}),
+      expectedTargetHash: row.expected_target_hash,
+      resultingContentHash: row.resulting_content_hash,
+      diff: row.diff,
+      expectedWriteCount: row.expected_write_count,
+      vaultScanDigest: row.vault_scan_digest,
+      expectedPostScanDigest: row.expected_post_scan_digest,
+    };
+    if (
+      knowledgeProposalDigest(binding) !== row.proposal_digest
+      || sha256(row.content) !== row.resulting_content_hash
+      || knowledgeVaultScanDigest(vaultScan) !== row.vault_scan_digest
+      || vaultScan.matches.length !== 0
+    ) {
+      throw new Error(`Knowledge proposal integrity mismatch: ${id}`);
+    }
+    const selection = this.knowledgeSelection(row.selection_id);
+    if (canonicalJson(selection) !== canonicalJson(sourceSnapshot)) {
+      throw new Error(`Knowledge proposal selection snapshot mismatch: ${id}`);
+    }
+    return {
+      ...binding,
+      requestId: row.request_id,
+      status: row.status,
+      content: row.content,
+      proposalDigest: row.proposal_digest,
+      sourceSnapshot,
+      vaultScan,
+      createdAt: row.created_at,
+    };
   }
 
-  itemForKnowledge(itemId: string): BriefingItem {
-    const row = this.database.prepare("SELECT analysis_json FROM items WHERE item_id=?").get(itemId) as { analysis_json: string } | undefined;
-    if (!row) throw new Error(`Item not found: ${itemId}`);
-    return JSON.parse(row.analysis_json) as BriefingItem;
+  knowledgeProposalByRequestId(requestId: string): KnowledgeProposalRecord | null {
+    const row = this.database.prepare("SELECT proposal_id FROM knowledge_proposals WHERE request_id=? COLLATE NOCASE")
+      .get(requestId) as { proposal_id: string } | undefined;
+    return row ? this.knowledgeProposal(row.proposal_id) : null;
   }
 
-  markKnowledgeCommitted(id: string, now = new Date().toISOString()): void {
-    const changed = this.database.prepare("UPDATE knowledge_proposals SET status='committed',committed_at=? WHERE proposal_id=? AND status='proposed'").run(now, id);
-    if (changed.changes !== 1) throw new Error(`Knowledge proposal ${id} is not in proposed state`);
+  commitKnowledgeWithReceipt(input: {
+    proposalId: string;
+    proposalDigest: string;
+    expectedWriteCount: number;
+    targetPath: string;
+    expectedTargetHash: string;
+    expectedResultHash: string;
+    observedResultHash: string;
+    observedBytes: number;
+    committedAt?: string;
+  }): {
+    receiptId: string;
+    proposalId: string;
+    proposalDigest: string;
+    expectedWriteCount: number;
+    observedResultHash: string;
+    observedBytes: number;
+    readbackStatus: "MATCH";
+    committedAt: string;
+  } {
+    const committedAt = input.committedAt ?? new Date().toISOString();
+    const receiptId = `KNR-${randomUUID()}`;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const proposal = this.database.prepare(`SELECT status,proposal_digest,target_path,expected_target_hash,
+        resulting_content_hash,expected_write_count FROM knowledge_proposals WHERE proposal_id=?`)
+        .get(input.proposalId) as {
+          status: string;
+          proposal_digest: string | null;
+          target_path: string;
+          expected_target_hash: string | null;
+          resulting_content_hash: string | null;
+          expected_write_count: number | null;
+        } | undefined;
+      if (!proposal) throw new Error(`Knowledge proposal not found: ${input.proposalId}`);
+      if (proposal.status !== "proposed") throw new Error(`Knowledge proposal ${input.proposalId} is ${proposal.status}`);
+      if (proposal.proposal_digest !== input.proposalDigest) throw new Error("Knowledge proposal digest changed before durable commit");
+      if (
+        proposal.target_path !== input.targetPath
+        || proposal.expected_target_hash !== input.expectedTargetHash
+        || proposal.resulting_content_hash !== input.expectedResultHash
+        || proposal.expected_write_count !== input.expectedWriteCount
+      ) {
+        throw new Error("Knowledge commit receipt does not match the stored proposal");
+      }
+      if (input.expectedWriteCount !== 1) throw new Error("Knowledge commit receipt must bind exactly one target write");
+      if (input.observedResultHash !== input.expectedResultHash) throw new Error("Knowledge target readback hash mismatch");
+      const changed = this.database.prepare("UPDATE knowledge_proposals SET status='committed',committed_at=? WHERE proposal_id=? AND status='proposed'")
+        .run(committedAt, input.proposalId);
+      if (changed.changes !== 1) throw new Error(`Knowledge proposal ${input.proposalId} is not in proposed state`);
+      this.database.prepare(`INSERT INTO knowledge_commit_receipts(
+        receipt_id,proposal_id,proposal_digest,expected_write_count,target_path,expected_target_hash,
+        expected_result_hash,observed_result_hash,observed_bytes,readback_status,committed_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+        receiptId,
+        input.proposalId,
+        input.proposalDigest,
+        input.expectedWriteCount,
+        input.targetPath,
+        input.expectedTargetHash,
+        input.expectedResultHash,
+        input.observedResultHash,
+        input.observedBytes,
+        "MATCH",
+        committedAt,
+      );
+      const readback = this.database.prepare(`SELECT receipt_id,proposal_digest,expected_write_count,target_path,
+        expected_target_hash,expected_result_hash,observed_result_hash,observed_bytes,readback_status,committed_at
+        FROM knowledge_commit_receipts WHERE proposal_id=?`).get(input.proposalId) as {
+          receipt_id: string;
+          proposal_digest: string;
+          expected_write_count: number;
+          target_path: string;
+          expected_target_hash: string;
+          expected_result_hash: string;
+          observed_result_hash: string;
+          observed_bytes: number;
+          readback_status: string;
+          committed_at: string;
+        } | undefined;
+      if (
+        !readback
+        || readback.receipt_id !== receiptId
+        || readback.proposal_digest !== input.proposalDigest
+        || readback.expected_write_count !== input.expectedWriteCount
+        || readback.target_path !== input.targetPath
+        || readback.expected_target_hash !== input.expectedTargetHash
+        || readback.expected_result_hash !== input.expectedResultHash
+        || readback.observed_result_hash !== input.observedResultHash
+        || readback.observed_bytes !== input.observedBytes
+        || readback.readback_status !== "MATCH"
+        || readback.committed_at !== committedAt
+      ) {
+        throw new Error("Knowledge commit receipt readback mismatch");
+      }
+      this.database.exec("COMMIT");
+      return {
+        receiptId: readback.receipt_id,
+        proposalId: input.proposalId,
+        proposalDigest: readback.proposal_digest,
+        expectedWriteCount: readback.expected_write_count,
+        observedResultHash: readback.observed_result_hash,
+        observedBytes: readback.observed_bytes,
+        readbackStatus: "MATCH",
+        committedAt: readback.committed_at,
+      };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  knowledgeCommitReceiptOrNull(proposalId: string): KnowledgeCommitReceipt | null {
+    const row = this.database.prepare(`SELECT receipt_id,proposal_digest,expected_write_count,
+      observed_result_hash,observed_bytes,readback_status,committed_at
+      FROM knowledge_commit_receipts WHERE proposal_id=?`).get(proposalId) as {
+        receipt_id: string;
+        proposal_digest: string;
+        expected_write_count: number;
+        observed_result_hash: string;
+        observed_bytes: number;
+        readback_status: string;
+        committed_at: string;
+      } | undefined;
+    return row ? {
+      receiptId: row.receipt_id,
+      proposalId,
+      proposalDigest: row.proposal_digest,
+      expectedWriteCount: row.expected_write_count,
+      observedResultHash: row.observed_result_hash,
+      observedBytes: row.observed_bytes,
+      readbackStatus: row.readback_status,
+      committedAt: row.committed_at,
+    } : null;
+  }
+
+  knowledgeCommitReceipt(proposalId: string): KnowledgeCommitReceipt {
+    const receipt = this.knowledgeCommitReceiptOrNull(proposalId);
+    if (!receipt) throw new Error(`Knowledge commit receipt not found: ${proposalId}`);
+    return receipt;
   }
 
   recordSchedule(adapter: string, expression: string, projectRoot: string, definition: string, now = new Date().toISOString()): string {

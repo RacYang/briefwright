@@ -16,7 +16,8 @@ import { setupProject } from "./commands/setup.js";
 import { auditLarkProject, backfillLarkProject, importContract, importLarkSnapshot, provisionLarkProject, syncProject } from "./commands/import-sync.js";
 import { migrateSources } from "./commands/source-migration.js";
 import { diagnoseProject, listImprovementProposals } from "./commands/improve.js";
-import { commitKnowledge, proposeKnowledge } from "./commands/knowledge.js";
+import { commitKnowledge, proposeKnowledge, readbackKnowledge, resolveKnowledge, selectKnowledge } from "./commands/knowledge.js";
+import type { KnowledgeReference } from "./core/knowledge-intake.js";
 import { createPolicyExperiment, evaluatePolicyExperiment, transitionPolicyExperiment } from "./commands/experiment.js";
 import { migrateConfiguration, migrateProjectDatabase } from "./commands/migrate.js";
 import { quarantineLegacyRun } from "./commands/quarantine.js";
@@ -30,6 +31,7 @@ import { ConfigurationError } from "./config/load.js";
 import { provisionSqlProject } from "./commands/sql.js";
 import { externalCaptureManifest, validateExternalCaptureFile } from "./commands/capture.js";
 import { installSkill, skillStatus } from "./commands/skill.js";
+import { serializeCommandError } from "./errors.js";
 
 const program = new Command();
 const VERSION = String((JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: unknown }).version);
@@ -490,28 +492,132 @@ for (const action of ["approve", "activate", "rollback"] as const) {
     });
 }
 
-const knowledgeCommand = program.command("knowledge").description("Preview and explicitly commit bounded knowledge-note changes.");
-knowledgeCommand.command("propose")
-  .argument("<item-id>")
-  .requiredOption("--target <relative-path>", "Markdown target inside the project")
-  .option("--heading <markdown-heading>", "existing heading under which to insert")
+type KnowledgeReferenceOptions = {
+  itemId?: string;
+  url?: string;
+  title?: string;
+  run?: string;
+};
+
+function knowledgeReference(options: KnowledgeReferenceOptions): KnowledgeReference {
+  const choices = [
+    options.itemId ? { kind: "item-id" as const, value: options.itemId } : null,
+    options.url ? { kind: "url" as const, value: options.url } : null,
+    options.title ? { kind: "title" as const, value: options.title } : null,
+  ].filter((entry): entry is { kind: KnowledgeReference["kind"]; value: string } => entry !== null);
+  if (choices.length !== 1) throw new Error("Specify exactly one of --item-id, --url, or --title");
+  return { ...choices[0]!, ...(options.run ? { runId: options.run } : {}) };
+}
+
+const knowledgeCommand = program.command("knowledge").description("Select, preview, and explicitly commit one source-bound knowledge-note change.");
+knowledgeCommand.command("resolve")
+  .option("--item-id <id>", "exact published Daily or Review item ID")
+  .option("--url <canonical-url>", "exact canonical source URL")
+  .option("--title <title>", "exact published item title")
+  .option("--run <run-id>", "exact published run ID when a reference appears in multiple runs")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
-  .action(async (itemId: string, options: { target: string; heading?: string; config: string }) => {
-    const result = await proposeKnowledge(options.config, itemId, options.target, options.heading);
-    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge propose", itemId, committed: false, ...result });
+  .action(async (options: KnowledgeReferenceOptions & { config: string }) => {
+    const result = await resolveKnowledge(options.config, knowledgeReference(options));
+    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge resolve", ...result });
+    console.log(`Resolved ${result.itemId} from ${result.runId}`);
+    console.log(`Title: ${result.title}`);
+    console.log(`Selection digest: ${result.selectionDigest}`);
+    console.log("Nothing was selected or written.");
+  });
+knowledgeCommand.command("select")
+  .option("--item-id <id>", "exact published Daily or Review item ID")
+  .option("--url <canonical-url>", "exact canonical source URL")
+  .option("--title <title>", "exact published item title")
+  .option("--run <run-id>", "exact published run ID when a reference appears in multiple runs")
+  .requiredOption("--expect-selection <sha256>", "bind selection to the reviewed resolve digest")
+  .requiredOption("--yes", "confirm this exact article selection")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (options: KnowledgeReferenceOptions & { expectSelection: string; yes: boolean; config: string }) => {
+    const result = await selectKnowledge(options.config, knowledgeReference(options), {
+      confirmed: options.yes,
+      expectedSelectionDigest: options.expectSelection,
+    });
+    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge select", ...result });
+    console.log(`${result.created ? "Selected" : "Reused selection for"} ${result.itemId}: ${result.selectionId}`);
+    console.log(`Selection digest: ${result.selectionDigest}`);
+  });
+knowledgeCommand.command("propose")
+  .argument("<selection-id>")
+  .requiredOption("--request-id <uuid-v4>", "stable client request ID for idempotent proposal retries")
+  .requiredOption("--target <relative-path>", "Markdown target inside the configured document root")
+  .option("--heading <markdown-heading>", "existing heading under which to merge")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (selectionId: string, options: { requestId: string; target: string; heading?: string; config: string }) => {
+    const result = await proposeKnowledge(options.config, selectionId, options.requestId, options.target, options.heading);
+    if (result.status === "HOLD") {
+      if (isJsonOutput()) writeJson({ ok: false, command: "knowledge propose", committed: false, ...result });
+      else {
+        console.log(`HOLD ${result.reason}: ${result.detail}`);
+        console.log("No proposal or knowledge-target write was created.");
+      }
+      process.exitCode = 2;
+      return;
+    }
+    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge propose", committed: false, ...result });
+    if (result.status === "READBACK") {
+      console.log(`Reused proposal: ${result.proposalId}`);
+      console.log(`Operation: ${result.operation}`);
+      console.log(`Target: ${result.targetPath}`);
+      console.log(`Preview readback: ${result.previewReadback.status}`);
+      console.log(`Target readback: ${result.targetReadback.status}`);
+      console.log(`Commit confirmation: ${result.commitConfirmation.status}`);
+      console.log(`Bounded diff:\n${result.diff}`);
+      console.log("No proposal or knowledge-target write was created.");
+      return;
+    }
     console.log(`Proposal: ${result.proposalId}`);
     console.log(`Preview: ${result.previewPath}`);
     console.log(`Target: ${result.targetPath}`);
-    console.log(`Nothing was written to the knowledge target. Review, then run 'briefwright knowledge commit ${result.proposalId} --yes'.`);
+    console.log(`Proposal digest: ${result.proposalDigest}`);
+    console.log(`Expected writes: ${result.expectedWriteCount}`);
+    console.log("Nothing was written to the knowledge target.");
+    console.log(`After review, commit with --yes --expect-digest ${result.proposalDigest} --expect-writes ${result.expectedWriteCount}.`);
+  });
+knowledgeCommand.command("readback")
+  .description("Read durable selection, proposal, preview, target, and optional commit-receipt state without writing")
+  .option("--request-id <uuid-v4>", "stable client request ID")
+  .option("--proposal-id <proposal-id>", "durable knowledge proposal ID")
+  .option("-c, --config <path>", "intent configuration", "briefing.yaml")
+  .action(async (options: { requestId?: string; proposalId?: string; config: string }) => {
+    const result = await readbackKnowledge(options.config, {
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.proposalId ? { proposalId: options.proposalId } : {}),
+    });
+    if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge readback", ...result });
+    console.log(`Proposal: ${result.proposalId} (${result.proposalStatus})`);
+    console.log(`Operation: ${result.operation}`);
+    console.log(`Target: ${result.targetPath}`);
+    console.log(`Preview readback: ${result.previewReadback.status}`);
+    console.log(`Target readback: ${result.targetReadback.status}`);
+    console.log(`Selection confirmation: ${result.selectionConfirmation.status}`);
+    console.log(`Commit confirmation: ${result.commitConfirmation.status}`);
+    console.log(`Bounded diff:\n${result.diff}`);
+    console.log("Writes: 0");
   });
 knowledgeCommand.command("commit")
   .argument("<proposal-id>")
   .requiredOption("--yes", "confirm the exact proposed write")
+  .requiredOption("--expect-digest <sha256>", "bind commit to the reviewed proposal digest")
+  .requiredOption("--expect-writes <count>", "bind commit to the reviewed write count")
   .option("-c, --config <path>", "intent configuration", "briefing.yaml")
-  .action(async (proposalId: string, { config }: { config: string }) => {
-    const result = await commitKnowledge(config, proposalId);
+  .action(async (proposalId: string, options: { yes: boolean; expectDigest: string; expectWrites: string; config: string }) => {
+    const expectedWrites = Number(options.expectWrites);
+    if (!Number.isSafeInteger(expectedWrites)) throw new Error("--expect-writes must be an integer");
+    const result = await commitKnowledge(options.config, proposalId, {
+      confirmed: options.yes,
+      proposalDigest: options.expectDigest,
+      expectedWrites,
+    });
     if (isJsonOutput()) return writeJson({ ok: true, command: "knowledge commit", committed: true, ...result });
     console.log(`Committed ${proposalId} to ${result.targetPath}`);
+    console.log(`Readback: ${result.readbackStatus} ${result.contentHash} (${result.observedBytes} bytes)`);
+    console.log(`Receipt: ${result.receiptId}`);
+    for (const warning of result.cleanupWarnings) console.log(`WARN ${warning}`);
   });
 
 const scheduleCommand = program.command("schedule").description("Describe or explicitly manage a native user schedule.");
@@ -712,14 +818,11 @@ try {
   await program.parseAsync();
 } catch (error) {
   if (isJsonOutput()) {
-    writeJson({
-      ok: false,
-      error: {
-        code: error instanceof ConfigurationError ? "CONFIG_INVALID" : "COMMAND_FAILED",
-        message: error instanceof Error ? error.message : String(error),
-        ...(error instanceof ConfigurationError ? { problems: error.problems } : {}),
-      },
-    });
+    if (error instanceof ConfigurationError) {
+      writeJson({ ok: false, error: { code: "CONFIG_INVALID", message: error.message, problems: error.problems } });
+    } else {
+      writeJson({ ok: false, ...serializeCommandError(error) });
+    }
     process.exitCode = 1;
   } else if (error instanceof ConfigurationError) {
     console.error(error.message);

@@ -1,6 +1,6 @@
 ---
 name: briefwright
-description: Create and operate source-linked AI intelligence briefings in ordinary language. Use for guided installation, model choice, Feishu or SQL process data, Obsidian or local documents, previews, formal runs, schedules, diagnostics, replay, feedback, and governed self-improvement.
+description: Create and operate source-linked AI intelligence briefings and governed knowledge intake in ordinary language. Use for guided installation, model choice, Feishu or SQL process data, Obsidian or local documents, previews, formal runs, schedules, diagnostics, replay, selected-article proposals or commits, feedback, and governed self-improvement.
 ---
 
 # Briefwright
@@ -152,6 +152,84 @@ remain a local preview. Then describe the schedule.
 Enablement must reject a stale or tampered preview, changed configuration, or failed online
 preflight. For evergreen knowledge, show the proposal preview before the approved commit. Never
 write the knowledge target directly.
+
+## Source-bound knowledge intake
+
+When the user says an article is useful or should enter their knowledge base, treat that as intent
+to begin intake, not as selection or commit authorization. A generic feedback label or feedback ID
+is not a knowledge selection and must never be passed to the proposal path. Never synthesize
+selection or proposal IDs, or calculate binding digests outside the CLI. Process one published item
+and at most one knowledge-target write at a time. One user confirmation authorizes at most one CLI
+state transition; consume it for that transition and never carry it forward.
+
+Keep the commands internal unless the user asks for them, and use this sequence:
+
+1. Resolve exactly one published Daily or Review item with `briefwright --json knowledge resolve`,
+   using one item ID, canonical URL, or exact title and an exact run ID when needed. Resolution is
+   read-only: require `writes: 0`, show the user the title, canonical source, and run, and retain the
+   exact item, run, capture, and selection-digest binding internally. Stop on an unpublished or
+   ambiguous reference instead of choosing a likely match.
+2. Ask the user to confirm that exact article selection. Only then call
+   `briefwright --json knowledge select` with the same one-of item, URL, or title reference,
+   `--yes`, and the exact `--expect-selection <selection-digest>`. Use only the returned selection
+   ID. If the identity or digest changed, re-resolve and ask again. Explain that selection creates a
+   durable local receipt but does not write a knowledge target; a generic feedback record such as
+   `knowledge-worthy`, any feedback ID, or earlier general approval does not substitute for this
+   confirmation. Do not first add generic feedback when the user's intent is knowledge intake. If a
+   matching feedback row already exists, do not claim feedback deduplication: the current runtime
+   retains the generic signal as feedback and exposes the selection-linked receipt separately; one
+   item carrying both still counts as one effective positive item.
+3. Resolve one Markdown target inside the configured document root. Generate one fresh UUID v4 as
+   the client request ID before the first proposal call, preserve it across retries, handoffs, and
+   context compression, then call
+   `briefwright --json knowledge propose <selection-id>` with the exact
+   `--request-id <uuid-v4>`, `--target <relative-markdown-path>`, and optional heading. Let the CLI infer `create` or `merge`;
+   do not force an operation or bypass its full eligible-vault scan. A duplicate, conflicting
+   capture, multiple match, incomplete scan, or missing heading returns `HOLD`; an unsafe target is
+   also blocking. In either case, report the reason, create no committable proposal, and keep
+   knowledge-target writes at zero rather than trying another target silently. After every
+   `PROPOSED` response, call `briefwright --json knowledge readback --request-id <same-uuid-v4>`
+   before showing the proposal or asking for commit confirmation; do the same if the response is
+   missing or uncertain.
+   A retry of `knowledge propose` is allowed only with that exact same request ID, selection, target,
+   and heading; `READBACK` means the existing proposal was reused with zero writes. Never generate a
+   replacement request ID merely because a response was lost. Require that this readback returns the
+   stored operation, bounded diff, expected target hash, resulting content hash, proposal digest,
+   vault-scan digest, and expected post-scan digest; missing proposal-review fields are blocking.
+4. Only for the matching `READBACK`, require preview and target readback `MATCH`, then show the
+   inferred operation, exact target and optional heading, bounded diff, and
+   expected write count. Retain the expected target hash, resulting content hash, proposal digest,
+   request ID, vault-scan digest, and expected post-scan digest from that same JSON result; never recompute,
+   edit, or reuse them for another proposal. State that only proposal metadata and its preview were
+   created and the knowledge target is unchanged. Do not request commit confirmation until the user
+   has reviewed this exact proposal.
+5. Obtain a separate confirmation bound to that proposal. Do not reuse selection confirmation or a
+   general request such as "save it". Only then call
+   `briefwright --json knowledge commit <proposal-id>` with `--yes`, the exact
+   `--expect-digest <proposal-digest>`, and `--expect-writes 1`. The CLI must recheck the selection,
+   proposal content, target preimage, and vault scan; install without clobbering; reread the exact
+   bytes; verify the expected unique post-scan match; and durably record the receipt.
+
+Treat conversation state as a cache and CLI readback as the recovery authority. Before handing this
+flow to another task or whenever context may be compressed, preserve only the exact run/item,
+selection ID and digest, request ID, proposal ID and digest, target, expected write count, and phase:
+`selection confirmation CONSUMED; commit confirmation REQUIRED` or `commit confirmation CONSUMED`.
+After a handoff or compression, call `knowledge readback` with the preserved request ID before taking
+the next action. Never infer an unconsumed confirmation from a summary, generic feedback, or the fact
+that the user previously said the article was valuable.
+
+Call the knowledge change committed only when the JSON result says `COMMITTED`, readback is `MATCH`,
+the receipt ID, observed hash, and byte count are present, and a subsequent `knowledge readback`
+reports the commit receipt and target readback as `MATCH`. A cleanup warning after that durable
+receipt is warning-only: report it and any retained backup path, and do not retry the commit. Any
+missing confirmation, wrong digest or count, stale target, scan drift, duplicate, conflict, write
+failure, or readback mismatch is blocking and must not be converted into success. If the runtime
+reports `RECOVERY_INCOMPLETE`, require `retryable: false`, `receiptStatus`, and the structured target,
+backup, displaced, and temporary path observations; assume every path marked `PRESERVE` requires
+preservation. Report exact paths only when the runtime returned them. If structured output omits the
+paths, say that recovery-path readback is unavailable and remain `HOLD`; never infer paths, search
+for candidates, delete files, or retry. Never retry any failed commit automatically; resolve the
+reported cause, create a fresh proposal when required, and repeat proposal review and confirmation.
 
 ## Governed self-improvement
 
